@@ -112,6 +112,46 @@ const LED_TABLE: [LedEntry; 52] = [
 
 const NO_LED: u8 = 0xFF;
 
+/// Physical x position (0..15 across both halves) of each LED in
+/// `LED_TABLE` order. Used by the rainbow animation to phase hue by
+/// horizontal position.
+#[rustfmt::skip]
+const LED_X: [u8; 52] = [
+    // Left half (chip 0)
+    0, 1, 2, 3, 4, 5,       // row 0 alphas
+    0, 1, 2, 3, 4, 5,       // row 1
+    0, 1, 2, 3, 4, 5,       // row 2
+    0, 1, 2, 3, 4,          // row 3 (no col 6)
+    5,                      // `B` at [4,4]
+    5, 6,                   // left thumbs [5,0] [5,1]
+    // Right half (chip 1)
+    10, 11, 12, 13, 14, 15, // row 6
+    10, 11, 12, 13, 14, 15, // row 7
+    10, 11, 12, 13, 14, 15, // row 8
+    10,                     // `N` at [10,2]
+    11, 12, 13, 14, 15,     // row 9 (no col 0)
+    9, 10,                  // right thumbs [11,5] [11,6]
+];
+
+/// Adafruit-style hue wheel: `pos` in 0..=255 sweeps red → green →
+/// blue → red. Returns full-saturation RGB; scale by `brightness` for
+/// overall intensity control.
+fn wheel(pos: u8) -> (u8, u8, u8) {
+    if pos < 85 {
+        (255 - pos * 3, pos * 3, 0)
+    } else if pos < 170 {
+        let p = pos - 85;
+        (0, 255 - p * 3, p * 3)
+    } else {
+        let p = pos - 170;
+        (p * 3, 0, 255 - p * 3)
+    }
+}
+
+fn scale(c: u8, brightness: u8) -> u8 {
+    ((c as u16 * brightness as u16) / 255) as u8
+}
+
 /// Matrix [row][col] -> index into `LED_TABLE`, or `NO_LED` for cells
 /// without a physical switch.
 #[rustfmt::skip]
@@ -204,6 +244,22 @@ impl Rgb {
             self.bufs[chip][entry.r as usize] = r;
             self.bufs[chip][entry.g as usize] = g;
             self.bufs[chip][entry.b as usize] = b;
+            self.dirty[chip] = true;
+        }
+    }
+
+    /// Cycle-left-right style rainbow: each key's hue is a function of
+    /// its physical x position (8 units of hue per column) plus a
+    /// time-varying phase. Full saturation; `brightness` scales the
+    /// whole wheel down to non-blinding intensity.
+    pub fn paint_rainbow(&mut self, phase: u8, brightness: u8) {
+        for (idx, entry) in LED_TABLE.iter().enumerate() {
+            let hue = (LED_X[idx] as u16 * 8 + phase as u16) as u8;
+            let (r, g, b) = wheel(hue);
+            let chip = entry.chip as usize;
+            self.bufs[chip][entry.r as usize] = scale(r, brightness);
+            self.bufs[chip][entry.g as usize] = scale(g, brightness);
+            self.bufs[chip][entry.b as usize] = scale(b, brightness);
             self.dirty[chip] = true;
         }
     }

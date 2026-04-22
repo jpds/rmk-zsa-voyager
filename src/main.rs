@@ -80,16 +80,12 @@ fn apply_led_frame(led1: &mut Output<'static>, led2: &mut Output<'static>, bits:
     LED_PORTB.store(portb, Ordering::Relaxed);
 }
 
-/// Paint the per-key RGB buffer with the palette for the given layer.
-fn paint_layer_rgb(rgb: &mut Rgb, layer: u8) {
+const RGB_BRIGHTNESS: u8 = 0x30;
+
+/// Paint a non-base layer's solid palette. Base layer (0) is animated
+/// in the main tick loop instead of being a static paint.
+fn paint_static_layer(rgb: &mut Rgb, layer: u8) {
     match layer {
-        0 => {
-            // Base: neutral warm white, orange thumbs as anchors.
-            rgb.set_all(0x18, 0x18, 0x18);
-            for (row, col) in [(5, 0), (5, 1), (11, 5), (11, 6)] {
-                rgb.set_key(row, col, 0x40, 0x18, 0x00);
-            }
-        }
         1 => rgb.set_all(0x00, 0x10, 0x40), // symbols/F-keys: cool blue
         2 => rgb.set_all(0x30, 0x00, 0x30), // media/nav: magenta
         _ => rgb.set_all(0x20, 0x20, 0x20),
@@ -97,17 +93,19 @@ fn paint_layer_rgb(rgb: &mut Rgb, layer: u8) {
 }
 
 /// Drive the four status LEDs (4-bit binary counter of the highest
-/// active layer) and recolor the per-key RGB matrix on every layer
-/// change. Owns the shared I2C handle for the RGB flush path.
+/// active layer), animate the per-key RGB matrix when the base layer
+/// is active, and swap to a solid per-layer palette for other layers.
 ///
 /// Boot behavior: 500 ms off, then an 8x250 ms cascade lighting LED1..4
-/// and clearing them in the same order. Layer 0 RGB colors are applied
-/// at the end of the cascade.
+/// and clearing them in the same order. The rainbow animation takes
+/// over once the cascade finishes.
 async fn layer_indicator(
     led1: &mut Output<'static>,
     led2: &mut Output<'static>,
     i2c: &SharedI2c,
 ) -> ! {
+    use rmk::embassy_futures::select::{Either, select};
+
     let mut sub = LayerChangeEvent::subscriber();
     let mut rgb = Rgb::new();
 
@@ -120,18 +118,37 @@ async fn layer_indicator(
         Timer::after_millis(250).await;
     }
 
-    paint_layer_rgb(&mut rgb, 0);
+    let mut layer: u8 = 0;
+    let mut phase: u8 = 0;
+    rgb.paint_rainbow(phase, RGB_BRIGHTNESS);
     {
         let mut bus = i2c.lock().await;
         let _ = rgb.flush(&mut bus);
     }
 
     loop {
-        let layer = sub.next_event().await.0;
-        apply_led_frame(led1, led2, layer);
-        paint_layer_rgb(&mut rgb, layer);
-        let mut bus = i2c.lock().await;
-        let _ = rgb.flush(&mut bus);
+        let tick = Timer::after_millis(50);
+        match select(tick, sub.next_event()).await {
+            Either::First(_) => {
+                if layer == 0 {
+                    phase = phase.wrapping_add(2);
+                    rgb.paint_rainbow(phase, RGB_BRIGHTNESS);
+                    let mut bus = i2c.lock().await;
+                    let _ = rgb.flush(&mut bus);
+                }
+            }
+            Either::Second(event) => {
+                layer = event.0;
+                apply_led_frame(led1, led2, layer);
+                if layer == 0 {
+                    rgb.paint_rainbow(phase, RGB_BRIGHTNESS);
+                } else {
+                    paint_static_layer(&mut rgb, layer);
+                }
+                let mut bus = i2c.lock().await;
+                let _ = rgb.flush(&mut bus);
+            }
+        }
     }
 }
 
