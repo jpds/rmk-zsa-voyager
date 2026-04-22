@@ -1,0 +1,48 @@
+[package]
+name = "rmk-zsa-voyager"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+rmk = { git = "https://github.com/haobogu/rmk", rev = "5d0cc6bf", default-features = false }
+
+embassy-stm32 = { version = "0.6", features = [
+    "stm32f303cb",
+    "time-driver-tim15",
+    "exti",
+    "unstable-pac",
+] }
+embassy-executor = { version = "0.10", features = [
+    "platform-cortex-m",
+    "executor-thread",
+    "executor-interrupt",
+] }
+embassy-time = { version = "0.5", features = ["tick-hz-32_768"] }
+
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.5"
+
+defmt = "1.0"
+panic-halt = "1.0"
+
+[[bin]]
+name = "rmk-zsa-voyager"
+test = false
+bench = false
+
+[profile.dev]
+codegen-units = 1
+debug = true
+opt-level = "s"
+overflow-checks = true
+lto = "fat"
+panic = "unwind"
+
+[profile.release]
+codegen-units = 1
+debug = true
+opt-level = "z"
+overflow-checks = false
+lto = "fat"

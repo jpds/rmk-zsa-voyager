@@ -1,0 +1,13 @@
+# Flash via DFU (ZSA bootloader):
+#   cargo build --release
+#   cargo objcopy --release -- -O binary rmk-zsa-voyager.bin
+#   dfu-util -d 3297:0791 -a 0 -s 0x08002000:leave -D rmk-zsa-voyager.bin
+
+[build]
+target = "thumbv7em-none-eabihf"
+
+[env]
+DEFMT_LOG = "error"
+# Workaround for rustc stack overflow when compiling rmk-types during
+# monomorphization. Without this, the compiler SIGSEGVs.
+RUST_MIN_STACK = "16777216"
