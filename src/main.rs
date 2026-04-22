@@ -58,25 +58,39 @@ unsafe fn pre_init() {
     }
 }
 
-/// Show the highest active layer as a 4-bit binary counter across the
-/// four status LEDs:
+/// Apply a 4-bit LED frame:
 ///   bit 0 -> LED1 (PB5, direct GPIO, active high)
 ///   bit 1 -> LED2 (PB4, direct GPIO, active high)
 ///   bit 2 -> LED3 (MCP Port B bit 7, active low)
 ///   bit 3 -> LED4 (MCP Port B bit 6, active low)
-/// The MCP-side bits are published via `LED_PORTB`; the matrix driver
-/// flushes that byte to the expander on the next scan pass.
+fn apply_led_frame(led1: &mut Output<'static>, led2: &mut Output<'static>, bits: u8) {
+    led1.set_level(((bits & 0b0001) != 0).into());
+    led2.set_level(((bits & 0b0010) != 0).into());
+    let led3_on = (bits >> 2) & 1;
+    let led4_on = (bits >> 3) & 1;
+    let portb = ((led3_on ^ 1) << 7) | ((led4_on ^ 1) << 6);
+    LED_PORTB.store(portb, Ordering::Relaxed);
+}
+
+/// Boot LED cascade (500ms off, then 8x250ms frames lighting LED1..4
+/// then clearing them in the same order) followed by a binary readout
+/// of the currently active layer on every `LayerChangeEvent`.
 #[embassy_executor::task]
 async fn layer_indicator(mut led1: Output<'static>, mut led2: Output<'static>) {
     let mut sub = LayerChangeEvent::subscriber();
+
+    const BOOT_FRAMES: [u8; 4] = [
+        0b1001, 0b0110, 0b1111, 0b0000,
+    ];
+    Timer::after_millis(500).await;
+    for &frame in &BOOT_FRAMES {
+        apply_led_frame(&mut led1, &mut led2, frame);
+        Timer::after_millis(250).await;
+    }
+
     loop {
         let layer = sub.next_event().await.0;
-        led1.set_level(((layer & 0b0001) != 0).into());
-        led2.set_level(((layer & 0b0010) != 0).into());
-        let led3_on = (layer >> 2) & 1;
-        let led4_on = (layer >> 3) & 1;
-        let portb = ((led3_on ^ 1) << 7) | ((led4_on ^ 1) << 6);
-        LED_PORTB.store(portb, Ordering::Relaxed);
+        apply_led_frame(&mut led1, &mut led2, layer);
     }
 }
 
