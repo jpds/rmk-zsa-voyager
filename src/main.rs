@@ -4,17 +4,22 @@
 #[macro_use]
 mod macros;
 mod keymap;
+mod mcp23018;
 
 use core::ptr;
 
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Input, Level, Output, Speed};
+use embassy_stm32::i2c::{self, I2c};
 use embassy_stm32::peripherals::USB;
-use embassy_stm32::time::mhz;
+use embassy_stm32::time::{Hertz, mhz};
 use embassy_stm32::usb::{Driver, InterruptHandler};
 use embassy_stm32::{Config, bind_interrupts};
 use embassy_time::Timer;
 use keymap::{COL, ROW};
+use core::sync::atomic::Ordering;
+
+use mcp23018::{LED_PORTB, Mcp23018Matrix};
 use panic_halt as _;
 use rmk::config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
@@ -28,6 +33,10 @@ use rmk::{KeymapData, initialize_keymap, run_all, run_rmk};
 bind_interrupts!(struct Irqs {
     USB_LP_CAN_RX0 => InterruptHandler<USB>;
 });
+
+/// Physical rows / cols on the left half (direct-GPIO scan).
+const LEFT_ROWS: usize = 6;
+const LEFT_COLS: usize = 7;
 
 /// GD32F303 warm-boot cleanup for the ZSA Voyager.
 /// The ZSA bootloader jumps to firmware without resetting the NVIC,
@@ -49,19 +58,25 @@ unsafe fn pre_init() {
     }
 }
 
-/// Drive a status LED high whenever any non-base layer is active.
-/// Subscribes to RMK's LayerChangeEvent; the current layer value is
-/// published after every activate/deactivate/toggle.
+/// Show the highest active layer as a 4-bit binary counter across the
+/// four status LEDs:
+///   bit 0 -> LED1 (PB5, direct GPIO, active high)
+///   bit 1 -> LED2 (PB4, direct GPIO, active high)
+///   bit 2 -> LED3 (MCP Port B bit 7, active low)
+///   bit 3 -> LED4 (MCP Port B bit 6, active low)
+/// The MCP-side bits are published via `LED_PORTB`; the matrix driver
+/// flushes that byte to the expander on the next scan pass.
 #[embassy_executor::task]
-async fn layer_indicator(mut led: Output<'static>) {
+async fn layer_indicator(mut led1: Output<'static>, mut led2: Output<'static>) {
     let mut sub = LayerChangeEvent::subscriber();
     loop {
-        let event = sub.next_event().await;
-        if event.0 == 0 {
-            led.set_low();
-        } else {
-            led.set_high();
-        }
+        let layer = sub.next_event().await.0;
+        led1.set_level(((layer & 0b0001) != 0).into());
+        led2.set_level(((layer & 0b0010) != 0).into());
+        let led3_on = (layer >> 2) & 1;
+        let led4_on = (layer >> 3) & 1;
+        let portb = ((led3_on ^ 1) << 7) | ((led4_on ^ 1) << 6);
+        LED_PORTB.store(portb, Ordering::Relaxed);
     }
 }
 
@@ -86,10 +101,10 @@ async fn main(spawner: Spawner) {
     }
     let p = embassy_stm32::init(config);
 
-    // Status LED 2 (PB4) — lights up whenever a non-base layer is active.
-    // Status LED 1 (PB5) is left idle for now.
-    let layer_led = Output::new(p.PB4, Level::Low, Speed::Low);
-    spawner.spawn(layer_indicator(layer_led).unwrap());
+    // Status LEDs: PB5 = layer bit 0, PB4 = layer bit 1.
+    let led_bit0 = Output::new(p.PB5, Level::Low, Speed::Low);
+    let led_bit1 = Output::new(p.PB4, Level::Low, Speed::Low);
+    spawner.spawn(layer_indicator(led_bit0, led_bit1).unwrap());
 
     // Warm-boot disconnect: the ZSA bootloader leaves its USB peripheral
     // active when jumping to firmware, so the host continues to see the
@@ -130,9 +145,19 @@ async fn main(spawner: Spawner) {
 
     let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
 
-    // Left-half direct-GPIO matrix only. Right-half MCP23018 is step 4.
-    // Polarity mirrors the stm32f1 example (active-HIGH strobe,
-    // Pull::Down columns)
+    // Deassert MCP23018 reset (PB8, active LOW) and let the chip settle
+    // before the first I2C transaction.
+    let _mcp_reset = Output::new(p.PB8, Level::High, Speed::Low);
+    Timer::after_millis(10).await;
+
+    // I2C1 on PB6 (SCL) / PB7 (SDA) at 400 kHz, blocking. The MCP matrix
+    // driver retries init on NACK so a disconnected right half does not
+    // block the left half.
+    let mut i2c_config = i2c::Config::default();
+    i2c_config.frequency = Hertz::khz(400);
+    let mcp_i2c = I2c::new_blocking(p.I2C1, p.PB6, p.PB7, i2c_config);
+
+    // Left-half direct-GPIO matrix. Scans rows 0-5 of the 12x7 keymap.
     let (col_pins, row_pins) = config_matrix_pins_stm32!(
         peripherals: p,
         input:  [PA0, PA1, PA2, PA3, PA6, PA7, PB0],
@@ -153,9 +178,19 @@ async fn main(spawner: Spawner) {
     let per_key_config = PositionalConfig::default();
     let keymap = initialize_keymap(&mut keymap_data, &mut behavior_config, &per_key_config).await;
 
-    let debouncer = DefaultDebouncer::new();
-    let mut matrix = Matrix::<_, _, _, ROW, COL, false>::new(row_pins, col_pins, debouncer);
+    let left_debouncer = DefaultDebouncer::<LEFT_ROWS, LEFT_COLS>::new();
+    let mut left_matrix =
+        Matrix::<_, _, _, LEFT_ROWS, LEFT_COLS, false>::new(row_pins, col_pins, left_debouncer);
+
+    let right_debouncer = DefaultDebouncer::<ROW, COL>::new();
+    let mut right_matrix = Mcp23018Matrix::new(mcp_i2c, right_debouncer);
+
     let mut keyboard = Keyboard::new(&keymap);
 
-    join3(run_all!(matrix), keyboard.run(), run_rmk(driver, rmk_config)).await;
+    join3(
+        run_all!(left_matrix, right_matrix),
+        keyboard.run(),
+        run_rmk(driver, rmk_config),
+    )
+    .await;
 }
