@@ -3,6 +3,7 @@
 
 #[macro_use]
 mod macros;
+mod is31fl3731;
 mod keymap;
 mod mcp23018;
 
@@ -169,7 +170,13 @@ async fn main(spawner: Spawner) {
     // block the left half.
     let mut i2c_config = i2c::Config::default();
     i2c_config.frequency = Hertz::khz(400);
-    let mcp_i2c = I2c::new_blocking(p.I2C1, p.PB6, p.PB7, i2c_config);
+    let mut shared_i2c = I2c::new_blocking(p.I2C1, p.PB6, p.PB7, i2c_config);
+
+    // Light every RGB LED at a dim white (PWM 0x20) before handing the
+    // bus to the matrix driver. Ignore failures — the keyboard should
+    // still work if the LED drivers are absent or misbehaving.
+    let _ = is31fl3731::init_solid(&mut shared_i2c, is31fl3731::ADDR_LEFT, 0x20).await;
+    let _ = is31fl3731::init_solid(&mut shared_i2c, is31fl3731::ADDR_RIGHT, 0x20).await;
 
     // Left-half direct-GPIO matrix. Scans rows 0-5 of the 12x7 keymap.
     let (col_pins, row_pins) = config_matrix_pins_stm32!(
@@ -197,7 +204,7 @@ async fn main(spawner: Spawner) {
         Matrix::<_, _, _, LEFT_ROWS, LEFT_COLS, false>::new(row_pins, col_pins, left_debouncer);
 
     let right_debouncer = DefaultDebouncer::<ROW, COL>::new();
-    let mut right_matrix = Mcp23018Matrix::new(mcp_i2c, right_debouncer);
+    let mut right_matrix = Mcp23018Matrix::new(shared_i2c, right_debouncer);
 
     let mut keyboard = Keyboard::new(&keymap);
 
