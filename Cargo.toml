@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-rmk = { git = "https://github.com/haobogu/rmk", rev = "5d0cc6bf", default-features = false }
+rmk = { git = "https://github.com/haobogu/rmk", rev = "5d0cc6bf", default-features = false, features = ["vial", "storage"] }
 
 embassy-stm32 = { version = "0.6", features = [
     "stm32f303cb",
@@ -27,6 +27,11 @@ cortex-m-rt = "0.7.5"
 
 defmt = "1.0"
 panic-halt = "1.0"
+
+[build-dependencies]
+xz2 = "0.1.7"
+json = "0.12"
+const-gen = "1.6"
 
 [[bin]]
 name = "rmk-zsa-voyager"

@@ -6,11 +6,13 @@ mod macros;
 mod is31fl3731;
 mod keymap;
 mod mcp23018;
+mod vial;
 
 use core::ptr;
 use core::sync::atomic::Ordering;
 
 use embassy_executor::Spawner;
+use embassy_stm32::flash::Flash;
 use embassy_stm32::gpio::{Input, Level, Output, Speed};
 use embassy_stm32::i2c::{self, I2c};
 use embassy_stm32::peripherals::USB;
@@ -23,14 +25,18 @@ use is31fl3731::Rgb;
 use keymap::{COL, ROW};
 use mcp23018::{LED_PORTB, Mcp23018Matrix, SharedI2c};
 use panic_halt as _;
-use rmk::config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig};
+use rmk::config::{
+    BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig,
+};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::event::{EventSubscriber, LayerChangeEvent, SubscribableEvent};
 use rmk::futures::future::join4;
 use rmk::input_device::Runnable;
 use rmk::keyboard::Keyboard;
 use rmk::matrix::Matrix;
-use rmk::{KeymapData, initialize_keymap, run_all, run_rmk};
+use rmk::storage::async_flash_wrapper;
+use rmk::{KeymapData, initialize_keymap_and_storage, run_all, run_rmk};
+use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 bind_interrupts!(struct Irqs {
     USB_LP_CAN_RX0 => InterruptHandler<USB>;
@@ -230,13 +236,27 @@ async fn main(_spawner: Spawner) {
             product_name: "ZSA Voyager",
             ..Default::default()
         },
+        vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[]),
         ..Default::default()
     };
+
+    // Internal flash for Vial keymap persistence. StorageConfig::default()
+    // parks storage in the last two flash sectors; memory.x reserves that
+    // range so the linker never places firmware there.
+    let flash = async_flash_wrapper(Flash::new_blocking(p.FLASH));
+    let storage_config = StorageConfig::default();
 
     let mut keymap_data = KeymapData::new(keymap::get_default_keymap());
     let mut behavior_config = BehaviorConfig::default();
     let per_key_config = PositionalConfig::default();
-    let keymap = initialize_keymap(&mut keymap_data, &mut behavior_config, &per_key_config).await;
+    let (keymap, mut storage) = initialize_keymap_and_storage(
+        &mut keymap_data,
+        flash,
+        &storage_config,
+        &mut behavior_config,
+        &per_key_config,
+    )
+    .await;
 
     let left_debouncer = DefaultDebouncer::<LEFT_ROWS, LEFT_COLS>::new();
     let mut left_matrix =
@@ -251,7 +271,7 @@ async fn main(_spawner: Spawner) {
         run_all!(left_matrix, right_matrix),
         layer_indicator(&mut led_bit0, &mut led_bit1, &shared_i2c),
         keyboard.run(),
-        run_rmk(driver, rmk_config),
+        run_rmk(&keymap, driver, &mut storage, rmk_config),
     )
     .await;
 }
