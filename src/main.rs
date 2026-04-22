@@ -8,6 +8,7 @@ mod keymap;
 mod mcp23018;
 
 use core::ptr;
+use core::sync::atomic::Ordering;
 
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Input, Level, Output, Speed};
@@ -16,16 +17,16 @@ use embassy_stm32::peripherals::USB;
 use embassy_stm32::time::{Hertz, mhz};
 use embassy_stm32::usb::{Driver, InterruptHandler};
 use embassy_stm32::{Config, bind_interrupts};
+use embassy_sync::mutex::Mutex;
 use embassy_time::Timer;
+use is31fl3731::Rgb;
 use keymap::{COL, ROW};
-use core::sync::atomic::Ordering;
-
-use mcp23018::{LED_PORTB, Mcp23018Matrix};
+use mcp23018::{LED_PORTB, Mcp23018Matrix, SharedI2c};
 use panic_halt as _;
 use rmk::config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::event::{EventSubscriber, LayerChangeEvent, SubscribableEvent};
-use rmk::futures::future::join3;
+use rmk::futures::future::join4;
 use rmk::input_device::Runnable;
 use rmk::keyboard::Keyboard;
 use rmk::matrix::Matrix;
@@ -59,7 +60,7 @@ unsafe fn pre_init() {
     }
 }
 
-/// Apply a 4-bit LED frame:
+/// Apply a 4-bit status-LED frame:
 ///   bit 0 -> LED1 (PB5, direct GPIO, active high)
 ///   bit 1 -> LED2 (PB4, direct GPIO, active high)
 ///   bit 2 -> LED3 (MCP Port B bit 7, active low)
@@ -73,30 +74,63 @@ fn apply_led_frame(led1: &mut Output<'static>, led2: &mut Output<'static>, bits:
     LED_PORTB.store(portb, Ordering::Relaxed);
 }
 
-/// Boot LED cascade (500ms off, then 8x250ms frames lighting LED1..4
-/// then clearing them in the same order) followed by a binary readout
-/// of the currently active layer on every `LayerChangeEvent`.
-#[embassy_executor::task]
-async fn layer_indicator(mut led1: Output<'static>, mut led2: Output<'static>) {
+/// Paint the per-key RGB buffer with the palette for the given layer.
+fn paint_layer_rgb(rgb: &mut Rgb, layer: u8) {
+    match layer {
+        0 => {
+            // Base: neutral warm white, orange thumbs as anchors.
+            rgb.set_all(0x18, 0x18, 0x18);
+            for (row, col) in [(5, 0), (5, 1), (11, 5), (11, 6)] {
+                rgb.set_key(row, col, 0x40, 0x18, 0x00);
+            }
+        }
+        1 => rgb.set_all(0x00, 0x10, 0x40), // symbols/F-keys: cool blue
+        2 => rgb.set_all(0x30, 0x00, 0x30), // media/nav: magenta
+        _ => rgb.set_all(0x20, 0x20, 0x20),
+    }
+}
+
+/// Drive the four status LEDs (4-bit binary counter of the highest
+/// active layer) and recolor the per-key RGB matrix on every layer
+/// change. Owns the shared I2C handle for the RGB flush path.
+///
+/// Boot behavior: 500 ms off, then an 8x250 ms cascade lighting LED1..4
+/// and clearing them in the same order. Layer 0 RGB colors are applied
+/// at the end of the cascade.
+async fn layer_indicator(
+    led1: &mut Output<'static>,
+    led2: &mut Output<'static>,
+    i2c: &SharedI2c,
+) -> ! {
     let mut sub = LayerChangeEvent::subscriber();
+    let mut rgb = Rgb::new();
 
     const BOOT_FRAMES: [u8; 4] = [
         0b1001, 0b0110, 0b1111, 0b0000,
     ];
     Timer::after_millis(500).await;
     for &frame in &BOOT_FRAMES {
-        apply_led_frame(&mut led1, &mut led2, frame);
+        apply_led_frame(led1, led2, frame);
         Timer::after_millis(250).await;
+    }
+
+    paint_layer_rgb(&mut rgb, 0);
+    {
+        let mut bus = i2c.lock().await;
+        let _ = rgb.flush(&mut bus);
     }
 
     loop {
         let layer = sub.next_event().await.0;
-        apply_led_frame(&mut led1, &mut led2, layer);
+        apply_led_frame(led1, led2, layer);
+        paint_layer_rgb(&mut rgb, layer);
+        let mut bus = i2c.lock().await;
+        let _ = rgb.flush(&mut bus);
     }
 }
 
 #[embassy_executor::main]
-async fn main(spawner: Spawner) {
+async fn main(_spawner: Spawner) {
     let mut config = Config::default();
     {
         use embassy_stm32::rcc::*;
@@ -116,10 +150,10 @@ async fn main(spawner: Spawner) {
     }
     let p = embassy_stm32::init(config);
 
-    // Status LEDs: PB5 = layer bit 0, PB4 = layer bit 1.
-    let led_bit0 = Output::new(p.PB5, Level::Low, Speed::Low);
-    let led_bit1 = Output::new(p.PB4, Level::Low, Speed::Low);
-    spawner.spawn(layer_indicator(led_bit0, led_bit1).unwrap());
+    // Status LEDs: PB5 = layer bit 0, PB4 = layer bit 1. Held here so
+    // the layer_indicator future (joined below) can drive them.
+    let mut led_bit0 = Output::new(p.PB5, Level::Low, Speed::Low);
+    let mut led_bit1 = Output::new(p.PB4, Level::Low, Speed::Low);
 
     // Warm-boot disconnect: the ZSA bootloader leaves its USB peripheral
     // active when jumping to firmware, so the host continues to see the
@@ -165,26 +199,23 @@ async fn main(spawner: Spawner) {
     let _mcp_reset = Output::new(p.PB8, Level::High, Speed::Low);
     Timer::after_millis(10).await;
 
-    // I2C1 on PB6 (SCL) / PB7 (SDA) at 400 kHz, blocking. The MCP matrix
-    // driver retries init on NACK so a disconnected right half does not
-    // block the left half.
+    // I2C1 on PB6 (SCL) / PB7 (SDA) at 400 kHz, blocking. The bus is
+    // shared between the MCP matrix driver (continuous scanning) and
+    // the layer indicator's RGB flush path (on layer change) via a
+    // NoopRawMutex; the mutex lives in main's stack frame and is
+    // referenced by both futures joined below.
     let mut i2c_config = i2c::Config::default();
     i2c_config.frequency = Hertz::khz(400);
-    let mut shared_i2c = I2c::new_blocking(p.I2C1, p.PB6, p.PB7, i2c_config);
+    let shared_i2c: SharedI2c = Mutex::new(I2c::new_blocking(p.I2C1, p.PB6, p.PB7, i2c_config));
 
-    // Paint a per-key RGB pattern before handing the bus to the matrix
-    // driver. Failures are swallowed — the keyboard still works if the
-    // LED drivers are absent or misbehaving.
-    let _ = is31fl3731::init_chip(&mut shared_i2c, is31fl3731::ADDR_LEFT).await;
-    let _ = is31fl3731::init_chip(&mut shared_i2c, is31fl3731::ADDR_RIGHT).await;
-    let mut rgb = is31fl3731::Rgb::new();
-    rgb.set_all(0x18, 0x18, 0x18);
-    // Accent the four thumb keys in warm orange to confirm per-key
-    // addressing across both halves.
-    for (row, col) in [(5, 0), (5, 1), (11, 5), (11, 6)] {
-        rgb.set_key(row, col, 0x40, 0x18, 0x00);
+    // Bring both IS31FL3731 chips out of shutdown. Failures are
+    // swallowed; the keyboard still enumerates and scans if RGB is
+    // unresponsive.
+    {
+        let mut bus = shared_i2c.lock().await;
+        let _ = is31fl3731::init_chip(&mut bus, is31fl3731::ADDR_LEFT).await;
+        let _ = is31fl3731::init_chip(&mut bus, is31fl3731::ADDR_RIGHT).await;
     }
-    let _ = rgb.flush(&mut shared_i2c);
 
     // Left-half direct-GPIO matrix. Scans rows 0-5 of the 12x7 keymap.
     let (col_pins, row_pins) = config_matrix_pins_stm32!(
@@ -212,12 +243,13 @@ async fn main(spawner: Spawner) {
         Matrix::<_, _, _, LEFT_ROWS, LEFT_COLS, false>::new(row_pins, col_pins, left_debouncer);
 
     let right_debouncer = DefaultDebouncer::<ROW, COL>::new();
-    let mut right_matrix = Mcp23018Matrix::new(shared_i2c, right_debouncer);
+    let mut right_matrix = Mcp23018Matrix::new(&shared_i2c, right_debouncer);
 
     let mut keyboard = Keyboard::new(&keymap);
 
-    join3(
+    join4(
         run_all!(left_matrix, right_matrix),
+        layer_indicator(&mut led_bit0, &mut led_bit1, &shared_i2c),
         keyboard.run(),
         run_rmk(driver, rmk_config),
     )

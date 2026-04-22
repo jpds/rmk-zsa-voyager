@@ -1421,6 +1421,7 @@ dependencies = [
  "defmt",
  "embassy-executor",
  "embassy-stm32",
+ "embassy-sync",
  "embassy-time",
  "panic-halt",
  "rmk",

@@ -13,11 +13,15 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use embassy_stm32::i2c::{I2c, Master};
 use embassy_stm32::mode::Blocking;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::mutex::{Mutex, MutexGuard};
 use embassy_time::Timer;
 use rmk::debounce::{DebounceState, DebouncerTrait};
 use rmk::event::{KeyboardEvent, publish_event_async};
 use rmk::input_device::Runnable;
 use rmk::matrix::KeyState;
+
+pub type SharedI2c = Mutex<NoopRawMutex, I2c<'static, Blocking, Master>>;
 
 /// Target byte for the two MCP-connected status LEDs. Bits 6/7 drive
 /// the physical LED4 / LED3 outputs (active LOW). All other bits must
@@ -40,16 +44,16 @@ const SENSES: usize = 6;
 /// Right-half matrix driver. Debouncer is sized for the full 12x7
 /// keymap so that emitted events use the same coordinate space as the
 /// left-half `Matrix`.
-pub struct Mcp23018Matrix<'d, D: DebouncerTrait<12, 7>> {
-    i2c: I2c<'d, Blocking, Master>,
+pub struct Mcp23018Matrix<'i, D: DebouncerTrait<12, 7>> {
+    i2c: &'i SharedI2c,
     debouncer: D,
     key_states: [[KeyState; SENSES]; STROBES],
     initialized: bool,
     last_led_byte: u8,
 }
 
-impl<'d, D: DebouncerTrait<12, 7>> Mcp23018Matrix<'d, D> {
-    pub fn new(i2c: I2c<'d, Blocking, Master>, debouncer: D) -> Self {
+impl<'i, D: DebouncerTrait<12, 7>> Mcp23018Matrix<'i, D> {
+    pub fn new(i2c: &'i SharedI2c, debouncer: D) -> Self {
         Self {
             i2c,
             debouncer,
@@ -59,7 +63,10 @@ impl<'d, D: DebouncerTrait<12, 7>> Mcp23018Matrix<'d, D> {
         }
     }
 
-    fn init_expander(&mut self) -> bool {
+    fn init_expander_locked(
+        &mut self,
+        bus: &mut MutexGuard<'_, NoopRawMutex, I2c<'static, Blocking, Master>>,
+    ) -> bool {
         let cfg: [[u8; 2]; 5] = [
             [REG_IODIRA, 0x00],
             [REG_IODIRB, 0x3F],
@@ -69,7 +76,7 @@ impl<'d, D: DebouncerTrait<12, 7>> Mcp23018Matrix<'d, D> {
             [REG_GPIOB, 0xC0],
         ];
         for cmd in &cfg {
-            if self.i2c.blocking_write(MCP_ADDR, cmd).is_err() {
+            if bus.blocking_write(MCP_ADDR, cmd).is_err() {
                 return false;
             }
         }
@@ -77,16 +84,15 @@ impl<'d, D: DebouncerTrait<12, 7>> Mcp23018Matrix<'d, D> {
         true
     }
 
-    fn sync_leds(&mut self) {
+    fn sync_leds_locked(
+        &mut self,
+        bus: &mut MutexGuard<'_, NoopRawMutex, I2c<'static, Blocking, Master>>,
+    ) {
         let target = LED_PORTB.load(Ordering::Relaxed);
         if target == self.last_led_byte {
             return;
         }
-        if self
-            .i2c
-            .blocking_write(MCP_ADDR, &[REG_GPIOB, target])
-            .is_ok()
-        {
+        if bus.blocking_write(MCP_ADDR, &[REG_GPIOB, target]).is_ok() {
             self.last_led_byte = target;
         } else {
             self.initialized = false;
@@ -94,22 +100,25 @@ impl<'d, D: DebouncerTrait<12, 7>> Mcp23018Matrix<'d, D> {
     }
 
     async fn scan_once(&mut self) {
-        self.sync_leds();
+        let mut bus = self.i2c.lock().await;
+        self.sync_leds_locked(&mut bus);
         if !self.initialized {
             return;
         }
         for strobe in 0..STROBES {
             let a_val: u8 = 0x7F & !(1u8 << strobe);
-            if self.i2c.blocking_write(MCP_ADDR, &[REG_GPIOA, a_val]).is_err() {
+            if bus.blocking_write(MCP_ADDR, &[REG_GPIOA, a_val]).is_err() {
                 self.initialized = false;
                 return;
             }
-            // Let the row settle before reading the senses.
+            // Release the bus so the RGB painter can slip in during the
+            // row settle window, then re-acquire to read.
+            drop(bus);
             Timer::after_micros(10).await;
+            bus = self.i2c.lock().await;
 
             let mut rx = [0u8; 1];
-            if self
-                .i2c
+            if bus
                 .blocking_write_read(MCP_ADDR, &[REG_GPIOB], &mut rx)
                 .is_err()
             {
@@ -136,11 +145,14 @@ impl<'d, D: DebouncerTrait<12, 7>> Mcp23018Matrix<'d, D> {
     }
 }
 
-impl<'d, D: DebouncerTrait<12, 7>> Runnable for Mcp23018Matrix<'d, D> {
+impl<'i, D: DebouncerTrait<12, 7>> Runnable for Mcp23018Matrix<'i, D> {
     async fn run(&mut self) -> ! {
         loop {
             if !self.initialized {
-                if self.init_expander() {
+                let mut bus = self.i2c.lock().await;
+                let ok = self.init_expander_locked(&mut bus);
+                drop(bus);
+                if ok {
                     self.initialized = true;
                 } else {
                     Timer::after_millis(100).await;
