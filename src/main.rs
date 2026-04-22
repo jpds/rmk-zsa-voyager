@@ -172,11 +172,19 @@ async fn main(spawner: Spawner) {
     i2c_config.frequency = Hertz::khz(400);
     let mut shared_i2c = I2c::new_blocking(p.I2C1, p.PB6, p.PB7, i2c_config);
 
-    // Light every RGB LED at a dim white (PWM 0x20) before handing the
-    // bus to the matrix driver. Ignore failures — the keyboard should
-    // still work if the LED drivers are absent or misbehaving.
-    let _ = is31fl3731::init_solid(&mut shared_i2c, is31fl3731::ADDR_LEFT, 0x20).await;
-    let _ = is31fl3731::init_solid(&mut shared_i2c, is31fl3731::ADDR_RIGHT, 0x20).await;
+    // Paint a per-key RGB pattern before handing the bus to the matrix
+    // driver. Failures are swallowed — the keyboard still works if the
+    // LED drivers are absent or misbehaving.
+    let _ = is31fl3731::init_chip(&mut shared_i2c, is31fl3731::ADDR_LEFT).await;
+    let _ = is31fl3731::init_chip(&mut shared_i2c, is31fl3731::ADDR_RIGHT).await;
+    let mut rgb = is31fl3731::Rgb::new();
+    rgb.set_all(0x18, 0x18, 0x18);
+    // Accent the four thumb keys in warm orange to confirm per-key
+    // addressing across both halves.
+    for (row, col) in [(5, 0), (5, 1), (11, 5), (11, 6)] {
+        rgb.set_key(row, col, 0x40, 0x18, 0x00);
+    }
+    let _ = rgb.flush(&mut shared_i2c);
 
     // Left-half direct-GPIO matrix. Scans rows 0-5 of the 12x7 keymap.
     let (col_pins, row_pins) = config_matrix_pins_stm32!(
