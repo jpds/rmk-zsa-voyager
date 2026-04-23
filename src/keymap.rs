@@ -1,3 +1,4 @@
+use rmk::config::Hand;
 use rmk::types::action::KeyAction;
 use rmk::types::modifier::ModifierCombination;
 use rmk::{a, k, kbctrl, layer, lt, mt, shifted, wm};
@@ -5,6 +6,21 @@ use rmk::{a, k, kbctrl, layer, lt, mt, shifted, wm};
 pub(crate) const ROW: usize = 12;
 pub(crate) const COL: usize = 7;
 pub(crate) const NUM_LAYER: usize = 3;
+
+/// Per-cell hand assignment for unilateral-tap (chordal hold):
+/// a morse key held while another key on the same hand is pressed
+/// resolves as tap immediately. Voyager matrix is cleanly split —
+/// rows 0-4 are the left half alphas (direct GPIO), rows 6-10 are
+/// the right half alphas (MCP23018). Row 5 / row 11 are the thumb
+/// clusters and are left `Hand::Unknown` so thumb mods never get
+/// instant-tapped by a same-hand alpha press.
+#[rustfmt::skip]
+pub const HAND_MAP: [[Hand; COL]; ROW] = [
+    [Hand::Left; COL], [Hand::Left; COL],  [Hand::Left; COL],
+    [Hand::Left; COL], [Hand::Left; COL],  [Hand::Unknown; COL],
+    [Hand::Right; COL], [Hand::Right; COL], [Hand::Right; COL],
+    [Hand::Right; COL], [Hand::Right; COL], [Hand::Unknown; COL],
+];
 
 /// Default Voyager keymap.
 ///

@@ -259,7 +259,7 @@ async fn main(_spawner: Spawner) {
 
     let mut keymap_data = KeymapData::new(keymap::get_default_keymap());
     let mut behavior_config = BehaviorConfig::default();
-    let per_key_config = PositionalConfig::default();
+    let per_key_config = PositionalConfig::new(keymap::HAND_MAP);
     let (keymap, mut storage) = initialize_keymap_and_storage(
         &mut keymap_data,
         flash,
