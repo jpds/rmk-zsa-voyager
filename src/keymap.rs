@@ -80,7 +80,7 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
             [ a!(No),          a!(No),          a!(No),             a!(No),             a!(Transparent),    a!(No),            a!(No) ],
             [ a!(Transparent), a!(Transparent), a!(No),             a!(No),             a!(No),             a!(No),            a!(No) ],
             // Right half
-            [ a!(Transparent), a!(Transparent), a!(Transparent),   a!(Transparent),   a!(Transparent),                        a!(Transparent)          ,                      a!(No) ],
+            [ a!(Transparent), a!(Transparent), a!(Transparent),   a!(Transparent),   a!(Transparent),                        kbctrl!(Bootloader),                      a!(No) ],
             [ k!(PageUp),      k!(Home),        k!(Up),            k!(End),           a!(Transparent),                        a!(Transparent),                          a!(No) ],
             [ k!(PageDown),    k!(Left),        k!(Down),          k!(Right),         a!(Transparent),                        a!(Transparent),                          a!(No) ],
             [ a!(No),          wm!(Tab, ModifierCombination::new_from(false, false, false, true, true)), wm!(Tab, ModifierCombination::LCTRL), a!(Transparent), a!(Transparent), a!(Transparent), a!(No) ],
