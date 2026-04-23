@@ -10,6 +10,12 @@
 use embassy_stm32::i2c::{I2c, Master};
 use embassy_stm32::mode::Blocking;
 use embassy_time::Timer;
+#[cfg(feature = "palettefx")]
+use rmk_palettefx::color::{Hsv, hsv_to_rgb};
+#[cfg(feature = "palettefx")]
+use rmk_palettefx::layout::LedLayout;
+
+use crate::keymap::{COL, ROW};
 
 pub const ADDR_LEFT: u8 = 0x74;
 pub const ADDR_RIGHT: u8 = 0x77;
@@ -50,10 +56,13 @@ const fn e(chip: u8, r: u8, g: u8, b: u8) -> LedEntry {
     LedEntry { chip, r, g, b }
 }
 
+/// Number of physical RGB LEDs across both halves.
+pub const LED_COUNT: usize = 52;
+
 /// 52 physical LEDs in the order the Voyager wires them (left half
 /// rows 0-5 top-to-bottom, then right half rows 6-11).
 #[rustfmt::skip]
-const LED_TABLE: [LedEntry; 52] = [
+const LED_TABLE: [LedEntry; LED_COUNT] = [
     // Left half (chip 0)
     e(0, c(2,2),  c(1,2),  c(4,3)),
     e(0, c(2,3),  c(1,3),  c(3,3)),
@@ -110,13 +119,11 @@ const LED_TABLE: [LedEntry; 52] = [
     e(1, c(8,13), c(7,13), c(9,13)),
 ];
 
-const NO_LED: u8 = 0xFF;
-
 /// Physical x position (0..15 across both halves) of each LED in
-/// `LED_TABLE` order. Used by the rainbow animation to phase hue by
-/// horizontal position.
+/// `LED_TABLE` order. Used by the rainbow animation (hue phase offset)
+/// and, scaled by 17, by the `LedLayout` impl for rmk-palettefx.
 #[rustfmt::skip]
-const LED_X: [u8; 52] = [
+const LED_X: [u8; LED_COUNT] = [
     // Left half (chip 0)
     0, 1, 2, 3, 4, 5,       // row 0 alphas
     0, 1, 2, 3, 4, 5,       // row 1
@@ -133,9 +140,50 @@ const LED_X: [u8; 52] = [
     9, 10,                  // right thumbs [11,5] [11,6]
 ];
 
-/// Adafruit-style hue wheel: `pos` in 0..=255 sweeps red → green →
-/// blue → red. Returns full-saturation RGB; scale by `brightness` for
-/// overall intensity control.
+/// Physical y position (0..=255) for each LED in `LED_TABLE` order.
+/// Six physical rows per half map to 0, 51, 102, 153, 204, 255 (top
+/// row to thumb row). Consumed by the `LedLayout` impl below so
+/// rmk-palettefx effects that use the vertical axis (Gradient, Flow,
+/// Vortex) get sensible input. The B/N drop keys share the same y as
+/// the bottom alpha row (physically at the inner edge, not a row below).
+#[cfg(feature = "palettefx")]
+#[rustfmt::skip]
+const LED_Y: [u8; LED_COUNT] = [
+    // Left half (chip 0)
+    0,   0,   0,   0,   0,   0,    // row 0 (numbers)
+    51,  51,  51,  51,  51,  51,   // row 1
+    102, 102, 102, 102, 102, 102,  // row 2 (home)
+    153, 153, 153, 153, 153,       // row 3 (cols 1-5)
+    153,                           // row 4 (B drop — same y as row 3)
+    255, 255,                      // row 5 (thumbs)
+    // Right half (chip 1)
+    0,   0,   0,   0,   0,   0,    // row 6
+    51,  51,  51,  51,  51,  51,   // row 7
+    102, 102, 102, 102, 102, 102,  // row 8
+    153,                           // row 10 (N drop — same y as row 9)
+    153, 153, 153, 153, 153,       // row 9 (cols 1-5)
+    255, 255,                      // row 11 (thumbs)
+];
+
+/// LED position table for rmk-palettefx effects. Returns (x, y) on the
+/// 0..=255 grid: x = `LED_X[i] * 17` (so 0..=15 columns spread across
+/// the full byte range), y = `LED_Y[i]` directly.
+#[cfg(feature = "palettefx")]
+pub struct VoyagerLayout;
+
+#[cfg(feature = "palettefx")]
+impl LedLayout for VoyagerLayout {
+    fn count(&self) -> usize {
+        LED_COUNT
+    }
+
+    fn position(&self, index: usize) -> (u8, u8) {
+        (LED_X[index] * 17, LED_Y[index])
+    }
+}
+
+/// Adafruit-style hue wheel: sweeps red -> green -> blue -> red.
+#[cfg(not(feature = "palettefx"))]
 fn wheel(pos: u8) -> (u8, u8, u8) {
     if pos < 85 {
         (255 - pos * 3, pos * 3, 0)
@@ -148,29 +196,60 @@ fn wheel(pos: u8) -> (u8, u8, u8) {
     }
 }
 
+#[cfg(not(feature = "palettefx"))]
 fn scale(c: u8, brightness: u8) -> u8 {
     ((c as u16 * brightness as u16) / 255) as u8
 }
 
-/// Matrix [row][col] -> index into `LED_TABLE`, or `NO_LED` for cells
-/// without a physical switch.
+/// Sentinel in `KEY_TO_LED` for a matrix cell with no physical LED.
+pub const NO_LED: u8 = 0xFF;
+
+/// Matrix (row, col) -> flat LED index into `LED_TABLE`, or `NO_LED`
+/// for cells with no physical LED (unused matrix cells + the col-0
+/// alpha row gaps). Derived from the same physical layout as `LED_X`
+/// / `LED_Y`:
+///
+/// Left half:
+///   rows 0-2 alphas        cols 1-6 → LEDs 0-5 / 6-11 / 12-17
+///   row 3 alphas           cols 1-5 → LEDs 18-22
+///   row 4 `B` drop         col 4   → LED 23
+///   row 5 thumbs           cols 0-1 → LEDs 24-25
+///
+/// Right half:
+///   rows 6-8 alphas        cols 0-5 → LEDs 26-31 / 32-37 / 38-43
+///   row 9 alphas           cols 1-5 → LEDs 45-49
+///   row 10 `N` drop        col 2   → LED 44
+///   row 11 thumbs          cols 5-6 → LEDs 50-51
 #[rustfmt::skip]
-const KEY_TO_LED: [[u8; 7]; 12] = [
-    // Left half (rows 0-5). Col 0 is thumb-only; cols 1-6 are letters.
-    [NO_LED,  0,  1,  2,  3,  4,  5],  // row 0
-    [NO_LED,  6,  7,  8,  9, 10, 11],  // row 1
-    [NO_LED, 12, 13, 14, 15, 16, 17],  // row 2
-    [NO_LED, 18, 19, 20, 21, 22, NO_LED], // row 3
-    [NO_LED, NO_LED, NO_LED, NO_LED, 23, NO_LED, NO_LED], // row 4 (B)
-    [    24,     25, NO_LED, NO_LED, NO_LED, NO_LED, NO_LED], // row 5 (thumbs)
-    // Right half (rows 6-11). Col 6 is thumb-only; cols 0-5 are letters.
-    [    26, 27, 28, 29, 30, 31, NO_LED], // row 6
-    [    32, 33, 34, 35, 36, 37, NO_LED], // row 7
-    [    38, 39, 40, 41, 42, 43, NO_LED], // row 8
-    [NO_LED, 45, 46, 47, 48, 49, NO_LED], // row 9
-    [NO_LED, NO_LED, 44, NO_LED, NO_LED, NO_LED, NO_LED], // row 10 (N)
-    [NO_LED, NO_LED, NO_LED, NO_LED, NO_LED,     50,     51], // row 11 (thumbs)
+pub const KEY_TO_LED: [[u8; COL]; ROW] = [
+    // Left half
+    [NO_LED,  0,       1,      2,      3,      4,      5     ],
+    [NO_LED,  6,       7,      8,      9,     10,     11     ],
+    [NO_LED, 12,      13,     14,     15,     16,     17     ],
+    [NO_LED, 18,      19,     20,     21,     22, NO_LED     ],
+    [NO_LED, NO_LED, NO_LED, NO_LED,  23, NO_LED, NO_LED     ],
+    [    24, 25,  NO_LED, NO_LED, NO_LED, NO_LED, NO_LED     ],
+    // Right half
+    [    26, 27,      28,     29,     30,     31, NO_LED     ],
+    [    32, 33,      34,     35,     36,     37, NO_LED     ],
+    [    38, 39,      40,     41,     42,     43, NO_LED     ],
+    [NO_LED, 45,      46,     47,     48,     49, NO_LED     ],
+    [NO_LED, NO_LED,  44, NO_LED, NO_LED, NO_LED, NO_LED     ],
+    [NO_LED, NO_LED, NO_LED, NO_LED, NO_LED,     50,     51  ],
 ];
+
+/// Look up the LED index for a matrix key press. Returns `None` for
+/// out-of-range indices or matrix cells with no LED.
+pub fn key_to_led(row: u8, col: u8) -> Option<u8> {
+    let (r, c) = (row as usize, col as usize);
+    if r >= ROW || c >= COL {
+        return None;
+    }
+    match KEY_TO_LED[r][c] {
+        NO_LED => None,
+        idx => Some(idx),
+    }
+}
 
 fn write_reg(i2c: &mut I2c<'_, Blocking, Master>, addr: u8, reg: u8, val: u8) -> Result<(), ()> {
     i2c.blocking_write(addr, &[reg, val]).map_err(|_| ())
@@ -222,22 +301,6 @@ impl Rgb {
         }
     }
 
-    pub fn set_key(&mut self, row: usize, col: usize, r: u8, g: u8, b: u8) {
-        if row >= KEY_TO_LED.len() || col >= KEY_TO_LED[0].len() {
-            return;
-        }
-        let led = KEY_TO_LED[row][col];
-        if led == NO_LED {
-            return;
-        }
-        let entry = LED_TABLE[led as usize];
-        let chip = entry.chip as usize;
-        self.bufs[chip][entry.r as usize] = r;
-        self.bufs[chip][entry.g as usize] = g;
-        self.bufs[chip][entry.b as usize] = b;
-        self.dirty[chip] = true;
-    }
-
     pub fn set_all(&mut self, r: u8, g: u8, b: u8) {
         for entry in &LED_TABLE {
             let chip = entry.chip as usize;
@@ -248,10 +311,27 @@ impl Rgb {
         }
     }
 
-    /// Cycle-left-right style rainbow: each key's hue is a function of
-    /// its physical x position (8 units of hue per column) plus a
-    /// time-varying phase. Full saturation; `brightness` scales the
-    /// whole wheel down to non-blinding intensity.
+    /// Write an rmk-palettefx HSV frame to the chip buffers. `frame[i]`
+    /// is the colour for the i-th entry of `LED_TABLE`; each sample is
+    /// converted to RGB via the rmk-palettefx spectrum converter.
+    /// Global brightness is already baked into the HSV `v` field by
+    /// `FrameParams::val`, so no further scaling happens here.
+    #[cfg(feature = "palettefx")]
+    pub fn paint_hsv(&mut self, frame: &[Hsv; LED_COUNT]) {
+        for (idx, entry) in LED_TABLE.iter().enumerate() {
+            let rgb = hsv_to_rgb(frame[idx]);
+            let chip = entry.chip as usize;
+            self.bufs[chip][entry.r as usize] = rgb.r;
+            self.bufs[chip][entry.g as usize] = rgb.g;
+            self.bufs[chip][entry.b as usize] = rgb.b;
+            self.dirty[chip] = true;
+        }
+    }
+
+    /// Horizontal rainbow: each key's hue is offset by its x position
+    /// (8 hue units per column) plus `phase`. `brightness` scales the
+    /// whole output.
+    #[cfg(not(feature = "palettefx"))]
     pub fn paint_rainbow(&mut self, phase: u8, brightness: u8) {
         for (idx, entry) in LED_TABLE.iter().enumerate() {
             let hue = (LED_X[idx] as u16 * 8 + phase as u16) as u8;

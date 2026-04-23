@@ -11,3 +11,8 @@ DEFMT_LOG = "error"
 # Workaround for rustc stack overflow when compiling rmk-types during
 # monomorphization. Without this, the compiler SIGSEGVs.
 RUST_MIN_STACK = "16777216"
+# Point rmk-types' build.rs at our keyboard.toml so non-default event
+# channel sizes (e.g. [event.action] subs = 1 for the rmk-palettefx
+# LightAction dispatch in layer_indicator) land in constants.rs.
+# Without this, ActionEvent::subscriber() panics at boot.
+KEYBOARD_TOML_PATH = { value = "keyboard.toml", relative = true }

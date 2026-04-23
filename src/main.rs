@@ -20,7 +20,11 @@ use embassy_stm32::time::{Hertz, mhz};
 use embassy_stm32::usb::{Driver, InterruptHandler};
 use embassy_stm32::{Config, bind_interrupts};
 use embassy_sync::mutex::Mutex;
+#[cfg(feature = "palettefx")]
+use embassy_time::Instant;
 use embassy_time::Timer;
+#[cfg(feature = "palettefx")]
+use is31fl3731::{LED_COUNT, VoyagerLayout};
 use is31fl3731::Rgb;
 use keymap::{COL, ROW};
 use mcp23018::{LED_PORTB, Mcp23018Matrix, SharedI2c};
@@ -29,13 +33,31 @@ use rmk::config::{
     BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig,
 };
 use rmk::debounce::default_debouncer::DefaultDebouncer;
-use rmk::event::{EventSubscriber, LayerChangeEvent, SubscribableEvent};
+use rmk::event::{
+    ActionEvent, EventSubscriber, LayerChangeEvent,
+    SubscribableEvent,
+};
+#[cfg(feature = "palettefx")]
+use rmk::event::{KeyboardEvent, KeyboardEventPos};
+use rmk::types::action::Action;
+#[cfg(feature = "palettefx")]
+use rmk::types::action::LightAction;
 use rmk::futures::future::join4;
 use rmk::input_device::Runnable;
 use rmk::keyboard::Keyboard;
 use rmk::matrix::Matrix;
 use rmk::storage::async_flash_wrapper;
 use rmk::{KeymapData, initialize_keymap_and_storage, run_all, run_rmk};
+#[cfg(feature = "palettefx")]
+use rmk_palettefx::color::Hsv;
+#[cfg(feature = "palettefx")]
+use rmk_palettefx::effects::{
+    FlowState, FrameParams, Pcg32, ReactiveState, RippleState, SparkleState, VortexState, gradient,
+};
+#[cfg(feature = "palettefx")]
+use rmk_palettefx::layout::LedLayout;
+#[cfg(feature = "palettefx")]
+use rmk_palettefx::palette::{BUILTIN_PALETTES, Palette, id};
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 bind_interrupts!(struct Irqs {
@@ -80,7 +102,97 @@ fn apply_led_frame(led1: &mut Output<'static>, led2: &mut Output<'static>, bits:
     LED_PORTB.store(portb, Ordering::Relaxed);
 }
 
+/// Initial brightness. With palettefx this feeds `FrameParams::val`;
+/// without it scales the rainbow wheel output.
 const RGB_BRIGHTNESS: u8 = 0x30;
+#[cfg(feature = "palettefx")]
+const MIN_VAL: u8 = 0x08;
+/// Step applied by a single `light!(RgbVai/RgbVad)` press.
+#[cfg(feature = "palettefx")]
+const VAL_STEP: u8 = 0x10;
+
+/// Initial animation speed (FrameParams::speed). Adjusted by
+/// `light!(RgbSpi/RgbSpd)` at runtime. 192 was tuned on hardware.
+#[cfg(feature = "palettefx")]
+const RGB_SPEED: u8 = 192;
+#[cfg(feature = "palettefx")]
+const SPEED_STEP: u8 = 16;
+
+/// Number of simultaneous key-hits the Reactive effect remembers.
+/// Each hit fades out over ~1.3 s at the default speed, so 16 comfortably
+/// covers sustained ~8-10 keys-per-second typing.
+#[cfg(feature = "palettefx")]
+const REACTIVE_HITS: usize = 16;
+
+/// Fresh `Pcg32` state for Ripple. Constructed each time Ripple is
+/// cycled to so the drop sequence restarts deterministically.
+#[cfg(feature = "palettefx")]
+fn fresh_ripple_rng() -> Pcg32 {
+    Pcg32::new(0xDEAD_C0DE_CAFE_F00D, 0xA02B_DBF7_BB3C_0A7F)
+}
+
+/// Dynamically-switchable rmk-palettefx effect for the base layer.
+/// Each variant owns its own state so cycling resets the time phase.
+/// Gradient is stateless. Ripple carries a Pcg32 for drop-placement
+/// randomness; Reactive carries a ring of recent key hits.
+#[cfg(feature = "palettefx")]
+enum Effect {
+    Gradient,
+    Flow(FlowState),
+    Vortex(VortexState),
+    Sparkle(SparkleState),
+    Ripple(RippleState, Pcg32),
+    Reactive(ReactiveState<REACTIVE_HITS>),
+}
+
+#[cfg(feature = "palettefx")]
+impl Effect {
+    fn tick(&mut self, params: FrameParams<'_>, out: &mut [Hsv; LED_COUNT]) {
+        match self {
+            Self::Gradient => gradient(&VoyagerLayout, params, out),
+            Self::Flow(s) => s.tick(&VoyagerLayout, params, out),
+            Self::Vortex(s) => s.tick(&VoyagerLayout, params, out),
+            Self::Sparkle(s) => s.tick(&VoyagerLayout, params, out),
+            Self::Ripple(s, rng) => s.tick_with_rng(rng, &VoyagerLayout, params, out),
+            Self::Reactive(s) => s.tick(&VoyagerLayout, params, out),
+        }
+    }
+
+    fn next(&mut self) {
+        *self = match self {
+            Self::Gradient => Self::Flow(FlowState::new()),
+            Self::Flow(_) => Self::Vortex(VortexState::new()),
+            Self::Vortex(_) => Self::Sparkle(SparkleState::new()),
+            Self::Sparkle(_) => Self::Ripple(RippleState::new(), fresh_ripple_rng()),
+            Self::Ripple(_, _) => Self::Reactive(ReactiveState::new()),
+            Self::Reactive(_) => Self::Gradient,
+        };
+    }
+
+    fn prev(&mut self) {
+        *self = match self {
+            Self::Gradient => Self::Reactive(ReactiveState::new()),
+            Self::Reactive(_) => Self::Ripple(RippleState::new(), fresh_ripple_rng()),
+            Self::Ripple(_, _) => Self::Sparkle(SparkleState::new()),
+            Self::Sparkle(_) => Self::Vortex(VortexState::new()),
+            Self::Vortex(_) => Self::Flow(FlowState::new()),
+            Self::Flow(_) => Self::Gradient,
+        };
+    }
+
+    /// Record a key press against the Reactive effect; no-op for every
+    /// other variant. Returns `true` iff a hit was actually recorded,
+    /// so the caller can skip the follow-up re-tick / flush when it
+    /// wouldn't be visible.
+    fn record_hit(&mut self, led_idx: usize, timer_ms: u32) -> bool {
+        let Self::Reactive(s) = self else {
+            return false;
+        };
+        let (x, y) = VoyagerLayout.position(led_idx);
+        s.record_hit(x, y, timer_ms);
+        true
+    }
+}
 
 /// Paint a non-base layer's solid palette. Base layer (0) is animated
 /// in the main tick loop instead of being a static paint.
@@ -92,22 +204,65 @@ fn paint_static_layer(rgb: &mut Rgb, layer: u8) {
     }
 }
 
+/// Tick the active rmk-palettefx effect with the current palette /
+/// brightness / speed, then write the resulting HSV frame into the
+/// chip buffers. Called from the layer-0 animation path below and on
+/// every RGB state change so the LEDs respond immediately.
+#[cfg(feature = "palettefx")]
+fn tick_base_effect(
+    effect: &mut Effect,
+    palette: &Palette,
+    val: u8,
+    speed: u8,
+    frame: &mut [Hsv; LED_COUNT],
+    rgb: &mut Rgb,
+) {
+    effect.tick(
+        FrameParams {
+            palette,
+            speed,
+            sat: 255,
+            val,
+            timer_ms: Instant::now().as_millis() as u32,
+        },
+        frame,
+    );
+    rgb.paint_hsv(frame);
+}
+
 /// Drive the four status LEDs (4-bit binary counter of the highest
 /// active layer), animate the per-key RGB matrix when the base layer
 /// is active, and swap to a solid per-layer palette for other layers.
 ///
 /// Boot behavior: 500 ms off, then an 8x250 ms cascade lighting LED1..4
-/// and clearing them in the same order. The rainbow animation takes
-/// over once the cascade finishes.
+/// and clearing them in the same order. The Flow animation takes over
+/// once the cascade finishes.
 async fn layer_indicator(
     led1: &mut Output<'static>,
     led2: &mut Output<'static>,
     i2c: &SharedI2c,
 ) -> ! {
-    use rmk::embassy_futures::select::{Either, select};
+    use rmk::embassy_futures::select::{Either4, select4};
 
-    let mut sub = LayerChangeEvent::subscriber();
+    let mut layer_sub = LayerChangeEvent::subscriber();
+    let mut action_sub = ActionEvent::subscriber();
+    // KeyboardEvent feeds the Reactive effect's per-key hit history.
+    // It's a no-op for other effects; `record_hit` gates the flush.
+    #[cfg(feature = "palettefx")]
+    let mut key_sub = KeyboardEvent::subscriber();
     let mut rgb = Rgb::new();
+    #[cfg(feature = "palettefx")]
+    let mut effect = Effect::Flow(FlowState::new());
+    #[cfg(feature = "palettefx")]
+    let mut palette_idx: usize = id::AFTERBURN;
+    #[cfg(feature = "palettefx")]
+    let mut val: u8 = RGB_BRIGHTNESS;
+    #[cfg(feature = "palettefx")]
+    let mut speed: u8 = RGB_SPEED;
+    #[cfg(feature = "palettefx")]
+    let mut hsv_frame = [Hsv::default(); LED_COUNT];
+    #[cfg(not(feature = "palettefx"))]
+    let mut phase: u8 = 0;
 
     const BOOT_FRAMES: [u8; 4] = [
         0b1001, 0b0110, 0b1111, 0b0000,
@@ -119,7 +274,16 @@ async fn layer_indicator(
     }
 
     let mut layer: u8 = 0;
-    let mut phase: u8 = 0;
+    #[cfg(feature = "palettefx")]
+    tick_base_effect(
+        &mut effect,
+        BUILTIN_PALETTES[palette_idx],
+        val,
+        speed,
+        &mut hsv_frame,
+        &mut rgb,
+    );
+    #[cfg(not(feature = "palettefx"))]
     rgb.paint_rainbow(phase, RGB_BRIGHTNESS);
     {
         let mut bus = i2c.lock().await;
@@ -128,8 +292,32 @@ async fn layer_indicator(
 
     loop {
         let tick = Timer::after_millis(50);
-        match select(tick, sub.next_event()).await {
-            Either::First(_) => {
+        match select4(
+            tick,
+            layer_sub.next_event(),
+            action_sub.next_event(),
+            #[cfg(feature = "palettefx")]
+            key_sub.next_event(),
+            #[cfg(not(feature = "palettefx"))]
+            core::future::pending::<()>(),
+        )
+        .await
+        {
+            Either4::First(_) => {
+                #[cfg(feature = "palettefx")]
+                if layer == 0 {
+                    tick_base_effect(
+                        &mut effect,
+                        BUILTIN_PALETTES[palette_idx],
+                        val,
+                        speed,
+                        &mut hsv_frame,
+                        &mut rgb,
+                    );
+                    let mut bus = i2c.lock().await;
+                    let _ = rgb.flush(&mut bus);
+                }
+                #[cfg(not(feature = "palettefx"))]
                 if layer == 0 {
                     phase = phase.wrapping_add(2);
                     rgb.paint_rainbow(phase, RGB_BRIGHTNESS);
@@ -137,9 +325,23 @@ async fn layer_indicator(
                     let _ = rgb.flush(&mut bus);
                 }
             }
-            Either::Second(event) => {
+            Either4::Second(event) => {
                 layer = event.0;
                 apply_led_frame(led1, led2, layer);
+                #[cfg(feature = "palettefx")]
+                if layer == 0 {
+                    tick_base_effect(
+                        &mut effect,
+                        BUILTIN_PALETTES[palette_idx],
+                        val,
+                        speed,
+                        &mut hsv_frame,
+                        &mut rgb,
+                    );
+                } else {
+                    paint_static_layer(&mut rgb, layer);
+                }
+                #[cfg(not(feature = "palettefx"))]
                 if layer == 0 {
                     rgb.paint_rainbow(phase, RGB_BRIGHTNESS);
                 } else {
@@ -147,6 +349,76 @@ async fn layer_indicator(
                 }
                 let mut bus = i2c.lock().await;
                 let _ = rgb.flush(&mut bus);
+            }
+            Either4::Third(event) => {
+                #[cfg(feature = "palettefx")]
+                {
+                    let Action::Light(light) = event.action else {
+                        continue;
+                    };
+                    // rmk publishes ActionEvent on both press and release;
+                    // acting on either would apply each adjustment twice.
+                    // Act on press only.
+                    if !event.keyboard_event.pressed {
+                        continue;
+                    }
+                    let n = BUILTIN_PALETTES.len();
+                    match light {
+                        LightAction::RgbModeForward => effect.next(),
+                        LightAction::RgbModeReverse => effect.prev(),
+                        LightAction::RgbHui => palette_idx = (palette_idx + 1) % n,
+                        LightAction::RgbHud => palette_idx = (palette_idx + n - 1) % n,
+                        LightAction::RgbVai => val = val.saturating_add(VAL_STEP),
+                        LightAction::RgbVad => val = val.saturating_sub(VAL_STEP).max(MIN_VAL),
+                        LightAction::RgbSpi => speed = speed.saturating_add(SPEED_STEP),
+                        LightAction::RgbSpd => speed = speed.saturating_sub(SPEED_STEP),
+                        _ => continue,
+                    }
+                    if layer == 0 {
+                        tick_base_effect(
+                            &mut effect,
+                            BUILTIN_PALETTES[palette_idx],
+                            val,
+                            speed,
+                            &mut hsv_frame,
+                            &mut rgb,
+                        );
+                        let mut bus = i2c.lock().await;
+                        let _ = rgb.flush(&mut bus);
+                    }
+                }
+            }
+            Either4::Fourth(_event) => {
+                #[cfg(feature = "palettefx")]
+                {
+                    // Feed the Reactive effect. Other variants don't care,
+                    // and `record_hit` short-circuits to a no-op for them.
+                    if !_event.pressed || layer != 0 {
+                        continue;
+                    }
+                    let KeyboardEventPos::Key(pos) = _event.pos else {
+                        continue;
+                    };
+                    let Some(led) = is31fl3731::key_to_led(pos.row, pos.col) else {
+                        continue;
+                    };
+                    let now_ms = Instant::now().as_millis() as u32;
+                    if effect.record_hit(led as usize, now_ms) {
+                        // Reactive recorded the hit; paint immediately so
+                        // the user sees a response on the press rather
+                        // than up to 50 ms later on the next tick.
+                        tick_base_effect(
+                            &mut effect,
+                            BUILTIN_PALETTES[palette_idx],
+                            val,
+                            speed,
+                            &mut hsv_frame,
+                            &mut rgb,
+                        );
+                        let mut bus = i2c.lock().await;
+                        let _ = rgb.flush(&mut bus);
+                    }
+                }
             }
         }
     }

@@ -1,7 +1,7 @@
 use rmk::config::Hand;
 use rmk::types::action::KeyAction;
 use rmk::types::modifier::ModifierCombination;
-use rmk::{a, k, kbctrl, layer, lt, mt, shifted, wm};
+use rmk::{a, k, kbctrl, layer, light, lt, mt, shifted, wm};
 
 pub(crate) const ROW: usize = 12;
 pub(crate) const COL: usize = 7;
@@ -73,9 +73,9 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
         // Layer 2 — media + navigation (reachable via Space thumb)
         layer!([
             // Left half
-            [ a!(No),          a!(No),           a!(No),             a!(No),             a!(No),             a!(No),            a!(No) ],
-            [ a!(No),          a!(Transparent),     a!(Transparent),     k!(AudioVolDown),   k!(AudioVolUp),     k!(AudioMute),      a!(Transparent) ],
-            [ a!(No),          a!(Transparent),     k!(MediaPrevTrack),  k!(MediaNextTrack), k!(MediaStop),      k!(MediaPlayPause), a!(Transparent) ],
+            [ a!(No),          a!(No),              a!(No),              light!(RgbModeForward), a!(No),          light!(RgbVad),     light!(RgbVai)   ],
+            [ a!(No),          light!(RgbHui),      a!(Transparent),     k!(AudioVolDown),       k!(AudioVolUp),  k!(AudioMute),      a!(Transparent)  ],
+            [ a!(No),          a!(Transparent),     k!(MediaPrevTrack),  k!(MediaNextTrack),     k!(MediaStop),   k!(MediaPlayPause), a!(Transparent)  ],
             [ a!(Transparent), a!(Transparent), a!(Transparent),    a!(Transparent),    a!(Transparent),    a!(Transparent),   a!(No) ],
             [ a!(No),          a!(No),          a!(No),             a!(No),             a!(Transparent),    a!(No),            a!(No) ],
             [ a!(Transparent), a!(Transparent), a!(No),             a!(No),             a!(No),             a!(No),            a!(No) ],
