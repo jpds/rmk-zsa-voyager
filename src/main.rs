@@ -182,10 +182,10 @@ async fn main(_spawner: Spawner) {
     // active when jumping to firmware, so the host continues to see the
     // bootloader's D+ pull-up. CNTR.PDWN=1 / APB1RSTR toggle do NOT
     // release the pull-up on this hardware. What does work: gate the
-    // USB clock off, drive PA12 (D+) low as a regular GPIO, hold 50ms
-    // so the host sees a disconnect transient, restore PA12 to input,
-    // then re-enable the USB clock. Driver::new then brings USB up
-    // cleanly and the host enumerates our new device.
+    // USB clock off and drive PA12 (D+) low as a regular GPIO. We hold
+    // that state all the way through storage init (see the matching
+    // restore just before Driver::new below); otherwise a slow
+    // clear_storage erase pushes SET_ADDRESS past the host's timeout.
     unsafe {
         // RCC_APB1ENR = 0x4002_101C, USB clock gate = bit 23
         let apb1enr = 0x4002_101C as *mut u32;
@@ -203,19 +203,13 @@ async fn main(_spawner: Spawner) {
         ptr::write_volatile(odr, d & !(1 << 12));
     }
     Timer::after_millis(50).await;
-    unsafe {
-        // Restore PA12 MODER to input (0b00). USB peripheral will reclaim
-        // the pin when re-enabled.
-        let moder = 0x48000000 as *mut u32;
-        let m = ptr::read_volatile(moder);
-        ptr::write_volatile(moder, m & !(0b11 << 24));
-
-        let apb1enr = 0x4002_101C as *mut u32;
-        let v = ptr::read_volatile(apb1enr);
-        ptr::write_volatile(apb1enr, v | (1 << 23));
-    }
-
-    let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
+    // PA12 stays driven low as GPIO and the USB clock stays off until
+    // just before Driver::new below. Re-enabling the clock here would
+    // bring the internal pull-up back up (the bootloader leaves PDWN=0,
+    // so clocking alone is enough to reassert D+), starting the host's
+    // enumeration timer before storage init has completed. Holding the
+    // disconnect through storage init keeps SET_ADDRESS inside the
+    // host's window.
 
     // Deassert MCP23018 reset (PB8, active LOW) and let the chip settle
     // before the first I2C transaction.
@@ -283,6 +277,23 @@ async fn main(_spawner: Spawner) {
     let mut right_matrix = Mcp23018Matrix::new(&shared_i2c, right_debouncer);
 
     let mut keyboard = Keyboard::new(&keymap);
+
+    // Storage init is done; release the warm-boot disconnect and hand
+    // PA12/USB back to the peripheral. The host sees D+ come up only
+    // now, well after any clear_storage flash erase has finished, so
+    // enumeration starts against a device that can respond immediately.
+    unsafe {
+        // Restore PA12 MODER to input (0b00).
+        let moder = 0x48000000 as *mut u32;
+        let m = ptr::read_volatile(moder);
+        ptr::write_volatile(moder, m & !(0b11 << 24));
+
+        // Re-enable USB clock.
+        let apb1enr = 0x4002_101C as *mut u32;
+        let v = ptr::read_volatile(apb1enr);
+        ptr::write_volatile(apb1enr, v | (1 << 23));
+    }
+    let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
 
     join4(
         run_all!(left_matrix, right_matrix),
