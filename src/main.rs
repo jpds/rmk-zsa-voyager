@@ -40,6 +40,8 @@ use rmk::event::{
 #[cfg(feature = "palettefx")]
 use rmk::event::{KeyboardEvent, KeyboardEventPos};
 use rmk::types::action::Action;
+use rmk::types::keycode::{HidKeyCode, KeyCode};
+use rmk::types::morse::{Morse, MorseProfile};
 #[cfg(feature = "palettefx")]
 use rmk::types::action::LightAction;
 use rmk::futures::future::join4;
@@ -531,6 +533,14 @@ async fn main(_spawner: Spawner) {
 
     let mut keymap_data = KeymapData::new(keymap::get_default_keymap());
     let mut behavior_config = BehaviorConfig::default();
+    // TD_ESC_EQL: tap = Escape, double-tap = Equal.
+    let _ = behavior_config.morse.morses.push(Morse::new_from_vial(
+        Action::Key(KeyCode::Hid(HidKeyCode::Escape)),
+        Action::No,
+        Action::No,
+        Action::Key(KeyCode::Hid(HidKeyCode::Equal)),
+        MorseProfile::const_default(),
+    ));
     let per_key_config = PositionalConfig::new(keymap::HAND_MAP);
     let (keymap, mut storage) = initialize_keymap_and_storage(
         &mut keymap_data,
