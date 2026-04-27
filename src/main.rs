@@ -44,8 +44,9 @@ use rmk::types::keycode::{HidKeyCode, KeyCode};
 use rmk::types::morse::{Morse, MorseProfile};
 #[cfg(feature = "palettefx")]
 use rmk::types::action::LightAction;
-use rmk::futures::future::join4;
-use rmk::input_device::Runnable;
+use rmk::futures::future::join5;
+use rmk::core_traits::Runnable;
+use rmk::host::HostService;
 use rmk::keyboard::Keyboard;
 use rmk::matrix::Matrix;
 use rmk::storage::async_flash_wrapper;
@@ -559,6 +560,7 @@ async fn main(_spawner: Spawner) {
     let mut right_matrix = Mcp23018Matrix::new(&shared_i2c, right_debouncer);
 
     let mut keyboard = Keyboard::new(&keymap);
+    let mut host_service = HostService::new(&keymap, &rmk_config);
 
     // Storage init is done; release the warm-boot disconnect and hand
     // PA12/USB back to the peripheral. The host sees D+ come up only
@@ -577,11 +579,12 @@ async fn main(_spawner: Spawner) {
     }
     let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
 
-    join4(
-        run_all!(left_matrix, right_matrix),
+    join5(
+        run_all!(left_matrix, right_matrix, storage),
         layer_indicator(&mut led_bit0, &mut led_bit1, &shared_i2c),
         keyboard.run(),
-        run_rmk(&keymap, driver, &mut storage, rmk_config),
+        host_service.run(),
+        run_rmk(driver, rmk_config),
     )
     .await;
 }

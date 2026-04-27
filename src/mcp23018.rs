@@ -16,9 +16,9 @@ use embassy_stm32::mode::Blocking;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::{Mutex, MutexGuard};
 use embassy_time::Timer;
+use rmk::core_traits::Runnable;
 use rmk::debounce::{DebounceState, DebouncerTrait};
 use rmk::event::{KeyboardEvent, publish_event_async};
-use rmk::input_device::Runnable;
 use rmk::matrix::KeyState;
 
 pub type SharedI2c = Mutex<NoopRawMutex, I2c<'static, Blocking, Master>>;
