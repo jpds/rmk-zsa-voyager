@@ -25,7 +25,13 @@ live-editable via Vial.
 
 ## Building
 
-Install the Rust toolchain and the Cortex-M4F target:
+Either use the Nix development shell environment provided in `flake.nix`:
+
+```sh
+nix develop
+```
+
+Or install the Rust toolchain and the Cortex-M4F target:
 
 ```sh
 rustup target add thumbv7em-none-eabihf
