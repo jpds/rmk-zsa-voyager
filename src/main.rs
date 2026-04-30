@@ -23,33 +23,30 @@ use embassy_sync::mutex::Mutex;
 #[cfg(feature = "palettefx")]
 use embassy_time::Instant;
 use embassy_time::Timer;
+use is31fl3731::Rgb;
 #[cfg(feature = "palettefx")]
 use is31fl3731::{LED_COUNT, VoyagerLayout};
-use is31fl3731::Rgb;
 use keymap::{COL, ROW};
 use mcp23018::{LED_PORTB, Mcp23018Matrix, SharedI2c};
 use panic_halt as _;
 use rmk::config::{
     BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig,
 };
+use rmk::core_traits::Runnable;
 use rmk::debounce::default_debouncer::DefaultDebouncer;
-use rmk::event::{
-    ActionEvent, EventSubscriber, LayerChangeEvent,
-    SubscribableEvent,
-};
+use rmk::event::{ActionEvent, EventSubscriber, LayerChangeEvent, SubscribableEvent};
 #[cfg(feature = "palettefx")]
 use rmk::event::{KeyboardEvent, KeyboardEventPos};
-use rmk::types::action::Action;
-use rmk::types::keycode::{HidKeyCode, KeyCode};
-use rmk::types::morse::{Morse, MorseProfile};
-#[cfg(feature = "palettefx")]
-use rmk::types::action::LightAction;
 use rmk::futures::future::join5;
-use rmk::core_traits::Runnable;
 use rmk::host::HostService;
 use rmk::keyboard::Keyboard;
 use rmk::matrix::Matrix;
 use rmk::storage::async_flash_wrapper;
+use rmk::types::action::Action;
+#[cfg(feature = "palettefx")]
+use rmk::types::action::LightAction;
+use rmk::types::keycode::{HidKeyCode, KeyCode};
+use rmk::types::morse::{Morse, MorseProfile};
 use rmk::{KeymapData, initialize_keymap_and_storage, run_all, run_rmk};
 #[cfg(feature = "palettefx")]
 use rmk_palettefx::color::Hsv;
@@ -267,9 +264,7 @@ async fn layer_indicator(
     #[cfg(not(feature = "palettefx"))]
     let mut phase: u8 = 0;
 
-    const BOOT_FRAMES: [u8; 4] = [
-        0b1001, 0b0110, 0b1111, 0b0000,
-    ];
+    const BOOT_FRAMES: [u8; 4] = [0b1001, 0b0110, 0b1111, 0b0000];
     Timer::after_millis(500).await;
     for &frame in &BOOT_FRAMES {
         apply_led_frame(led1, led2, frame);
