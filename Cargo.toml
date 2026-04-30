@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-rmk = { git = "https://github.com/HaoboGu/rmk", rev = "a0197743", default-features = false, features = ["vial", "storage", "zsa_voyager_bl"] }
+rmk = { git = "https://github.com/HaoboGu/rmk", rev = "5218064", default-features = false, features = ["vial", "storage", "zsa_voyager_bl"] }
 
 embassy-stm32 = { version = "0.6", features = [
     "stm32f303cb",
