@@ -112,9 +112,9 @@ const MIN_VAL: u8 = 0x08;
 const VAL_STEP: u8 = 0x10;
 
 /// Initial animation speed (FrameParams::speed). Adjusted by
-/// `light!(RgbSpi/RgbSpd)` at runtime. 192 was tuned on hardware.
+/// `light!(RgbSpi/RgbSpd)` at runtime. 128 was tuned on hardware.
 #[cfg(feature = "palettefx")]
-const RGB_SPEED: u8 = 192;
+const RGB_SPEED: u8 = 128;
 #[cfg(feature = "palettefx")]
 const SPEED_STEP: u8 = 16;
 
