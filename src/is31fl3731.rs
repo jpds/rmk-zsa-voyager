@@ -123,6 +123,7 @@ const LED_TABLE: [LedEntry; LED_COUNT] = [
 /// `LED_TABLE` order. Used by the rainbow animation (hue phase offset)
 /// and, scaled by 17, by the `LedLayout` impl for rmk-palettefx.
 #[rustfmt::skip]
+#[cfg(not(feature = "palettefx"))]
 const LED_X: [u8; LED_COUNT] = [
     // Left half (chip 0)
     0, 1, 2, 3, 4, 5,       // row 0 alphas
@@ -140,34 +141,33 @@ const LED_X: [u8; LED_COUNT] = [
     9, 10,                  // right thumbs [11,5] [11,6]
 ];
 
-/// Physical y position (0..=255) for each LED in `LED_TABLE` order.
-/// Six physical rows per half map to 0, 51, 102, 153, 204, 255 (top
-/// row to thumb row). Consumed by the `LedLayout` impl below so
-/// rmk-palettefx effects that use the vertical axis (Gradient, Flow,
-/// Vortex) get sensible input. The B/N drop keys share the same y as
-/// the bottom alpha row (physically at the inner edge, not a row below).
+/// Physical (x, y) positions for each LED in `LED_TABLE` order.
+///
+/// x spans 0–224 in physical coordinates, scaled to 0–255 (×255/224).
+/// y uses the *same* scale factor (×255/224 applied to the 0–58 y range),
+/// giving y ≈ 6–66. Both axes share one scale factor so the rotation matrix
+/// in Flow (and the polar math in Vortex/Ripple) is isotropic.
 #[cfg(feature = "palettefx")]
 #[rustfmt::skip]
-const LED_Y: [u8; LED_COUNT] = [
+const LED_POS: [(u8, u8); LED_COUNT] = [
     // Left half (chip 0)
-    0,   0,   0,   0,   0,   0,    // row 0 (numbers)
-    51,  51,  51,  51,  51,  51,   // row 1
-    102, 102, 102, 102, 102, 102,  // row 2 (home)
-    153, 153, 153, 153, 153,       // row 3 (cols 1-5)
-    153,                           // row 4 (B drop — same y as row 3)
-    255, 255,                      // row 5 (thumbs)
+    (  0, 11), ( 19, 11), ( 39,  9), ( 59,  6), ( 79,  9), ( 98, 11), // row 0 (numbers)
+    (  0, 24), ( 19, 24), ( 39, 22), ( 59, 19), ( 79, 22), ( 98, 24), // row 1
+    (  0, 37), ( 19, 37), ( 39, 34), ( 59, 32), ( 79, 34), ( 98, 37), // row 2 (home)
+    (  0, 49), ( 19, 49), ( 39, 47), ( 59, 44), ( 79, 47),            // row 3 (cols 1-5)
+    ( 98, 49),                                                          // row 4 (B drop)
+    ( 98, 60), (109, 66),                                              // row 5 (thumbs)
     // Right half (chip 1)
-    0,   0,   0,   0,   0,   0,    // row 6
-    51,  51,  51,  51,  51,  51,   // row 7
-    102, 102, 102, 102, 102, 102,  // row 8
-    153,                           // row 10 (N drop — same y as row 9)
-    153, 153, 153, 153, 153,       // row 9 (cols 1-5)
-    255, 255,                      // row 11 (thumbs)
+    (157, 11), (176, 11), (196,  9), (216,  6), (236,  9), (255, 11), // row 6 (numbers)
+    (157, 24), (176, 24), (196, 22), (216, 19), (236, 22), (255, 24), // row 7
+    (157, 37), (176, 37), (196, 34), (216, 32), (236, 34), (255, 37), // row 8 (home)
+    (157, 49),                                                          // row 10 (N drop)
+    (176, 49), (196, 47), (216, 44), (236, 47), (255, 49),            // row 9 (cols 1-5)
+    (146, 66), (157, 60),                                              // row 11 (thumbs)
 ];
 
-/// LED position table for rmk-palettefx effects. Returns (x, y) on the
-/// 0..=255 grid: x = `LED_X[i] * 17` (so 0..=15 columns spread across
-/// the full byte range), y = `LED_Y[i]` directly.
+/// LED position table for rmk-palettefx effects. Returns (x, y) from
+/// `LED_POS` - physical coordinates scaled to 0..=255.
 #[cfg(feature = "palettefx")]
 pub struct VoyagerLayout;
 
@@ -178,7 +178,7 @@ impl LedLayout for VoyagerLayout {
     }
 
     fn position(&self, index: usize) -> (u8, u8) {
-        (LED_X[index] * 17, LED_Y[index])
+        LED_POS[index]
     }
 }
 
