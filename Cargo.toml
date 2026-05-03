@@ -55,6 +55,7 @@ panic = "unwind"
 [profile.release]
 codegen-units = 1
 debug = true
+panic = "abort"
 opt-level = "z"
 overflow-checks = false
 lto = "fat"
