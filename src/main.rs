@@ -124,11 +124,12 @@ const SPEED_STEP: u8 = 16;
 #[cfg(feature = "palettefx")]
 const REACTIVE_HITS: usize = 16;
 
-/// Fresh `Pcg32` state for Ripple. Constructed each time Ripple is
-/// cycled to so the drop sequence restarts deterministically.
+/// Fresh `Pcg32` state for Ripple. Seeded from the current time so
+/// the first drop lands on a different key each time Ripple is cycled to.
 #[cfg(feature = "palettefx")]
 fn fresh_ripple_rng() -> Pcg32 {
-    Pcg32::new(0xDEAD_C0DE_CAFE_F00D, 0xA02B_DBF7_BB3C_0A7F)
+    let seed = 0xDEAD_C0DE_CAFE_F00Du64 ^ Instant::now().as_millis();
+    Pcg32::new(seed, 0xA02B_DBF7_BB3C_0A7F)
 }
 
 /// Dynamically-switchable rmk-palettefx effect for the base layer.
