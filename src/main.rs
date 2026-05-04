@@ -60,6 +60,33 @@ use rmk_palettefx::layout::LedLayout;
 use rmk_palettefx::palette::{BUILTIN_PALETTES, Palette, id};
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
+const IWDG_KR: *mut u32 = 0x4000_3000 as *mut u32;
+const IWDG_PR: *mut u32 = 0x4000_3004 as *mut u32;
+const IWDG_RLR: *mut u32 = 0x4000_3008 as *mut u32;
+
+fn iwdg_start() {
+    unsafe {
+        ptr::write_volatile(IWDG_KR, 0xCCCC);
+        ptr::write_volatile(IWDG_KR, 0x5555);
+        ptr::write_volatile(IWDG_PR, 0b110); // /256 → ~125 Hz ticks at LSI 32 kHz
+        ptr::write_volatile(IWDG_RLR, 1250); // 1250 / 125 Hz = 10s timeout
+    }
+}
+
+fn iwdg_feed() {
+    unsafe {
+        ptr::write_volatile(IWDG_KR, 0xAAAA);
+    }
+}
+
+#[embassy_executor::task]
+async fn watchdog_feeder() {
+    loop {
+        iwdg_feed();
+        Timer::after_secs(5).await;
+    }
+}
+
 bind_interrupts!(struct Irqs {
     USB_LP_CAN_RX0 => InterruptHandler<USB>;
 });
@@ -574,6 +601,12 @@ async fn main(_spawner: Spawner) {
         ptr::write_volatile(apb1enr, v | (1 << 23));
     }
     let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
+
+    // All slow init (storage erase, USB disconnect window) is done before
+    // this point. Start the IWDG now so it only guards the run loop.
+    // watchdog_feeder feeds it every 5s with a timeout of 10s.
+    iwdg_start();
+    _spawner.spawn(watchdog_feeder().unwrap());
 
     join5(
         run_all!(left_matrix, right_matrix, storage),
