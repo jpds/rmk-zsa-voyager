@@ -429,21 +429,7 @@ async fn layer_indicator(
                         continue;
                     };
                     let now_ms = Instant::now().as_millis() as u32;
-                    if effect.record_hit(led as usize, now_ms) {
-                        // Reactive recorded the hit; paint immediately so
-                        // the user sees a response on the press rather
-                        // than up to 50 ms later on the next tick.
-                        tick_base_effect(
-                            &mut effect,
-                            BUILTIN_PALETTES[palette_idx],
-                            val,
-                            speed,
-                            &mut hsv_frame,
-                            &mut rgb,
-                        );
-                        let mut bus = i2c.lock().await;
-                        let _ = rgb.flush(&mut bus);
-                    }
+                    effect.record_hit(led as usize, now_ms);
                 }
             }
         }
