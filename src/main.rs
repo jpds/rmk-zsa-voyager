@@ -48,6 +48,7 @@ use rmk::types::action::LightAction;
 use rmk::types::keycode::{HidKeyCode, KeyCode};
 use rmk::types::morse::{Morse, MorseProfile};
 use rmk::usb::UsbTransport;
+use rmk::watchdog::{WatchdogFeed, WatchdogRunner};
 use rmk::{KeymapData, initialize_keymap_and_storage, run_all};
 #[cfg(feature = "palettefx")]
 use rmk_palettefx::color::Hsv;
@@ -74,17 +75,13 @@ fn iwdg_start() {
     }
 }
 
-fn iwdg_feed() {
-    unsafe {
-        ptr::write_volatile(IWDG_KR, 0xAAAA);
-    }
-}
+struct Stm32Iwdg;
 
-#[embassy_executor::task]
-async fn watchdog_feeder() {
-    loop {
-        iwdg_feed();
-        Timer::after_secs(5).await;
+impl WatchdogFeed for Stm32Iwdg {
+    fn feed(&mut self) {
+        unsafe {
+            ptr::write_volatile(IWDG_KR, 0xAAAA);
+        }
     }
 }
 
@@ -590,15 +587,13 @@ async fn main(_spawner: Spawner) {
     }
     let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
 
-    // All slow init (storage erase, USB disconnect window) is done before
-    // this point. Start the IWDG now so it only guards the run loop.
-    // watchdog_feeder feeds it every 5s with a timeout of 10s.
     iwdg_start();
-    _spawner.spawn(watchdog_feeder().unwrap());
+    let mut watchdog_runner =
+        WatchdogRunner::new(Stm32Iwdg, embassy_time::Duration::from_secs(5));
 
     let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config);
     join5(
-        run_all!(left_matrix, right_matrix, storage),
+        run_all!(left_matrix, right_matrix, storage, watchdog_runner),
         layer_indicator(&mut led_bit0, &mut led_bit1, &shared_i2c),
         keyboard.run(),
         host_service.run(),
