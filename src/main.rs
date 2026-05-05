@@ -47,7 +47,8 @@ use rmk::types::action::Action;
 use rmk::types::action::LightAction;
 use rmk::types::keycode::{HidKeyCode, KeyCode};
 use rmk::types::morse::{Morse, MorseProfile};
-use rmk::{KeymapData, initialize_keymap_and_storage, run_all, run_rmk};
+use rmk::usb::UsbTransport;
+use rmk::{KeymapData, initialize_keymap_and_storage, run_all};
 #[cfg(feature = "palettefx")]
 use rmk_palettefx::color::Hsv;
 #[cfg(feature = "palettefx")]
@@ -594,12 +595,13 @@ async fn main(_spawner: Spawner) {
     iwdg_start();
     _spawner.spawn(watchdog_feeder().unwrap());
 
+    let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config);
     join5(
         run_all!(left_matrix, right_matrix, storage),
         layer_indicator(&mut led_bit0, &mut led_bit1, &shared_i2c),
         keyboard.run(),
         host_service.run(),
-        run_rmk(driver, rmk_config),
+        usb_transport.run(),
     )
     .await;
 }
