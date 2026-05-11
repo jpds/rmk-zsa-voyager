@@ -102,9 +102,9 @@ checksum = "2d7e60934ceec538daadb9d8432424ed043a904d8e0243f3c6446bce549a46ac"
 
 [[package]]
 name = "bitfield-struct"
-version = "0.12.1"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8769c4854c5ada2852ddf6fd09d15cf43d4c2aaeccb4de6432f5402f08a6003b"
+checksum = "3ca6739863c590881f038d033a146c51ddae239186a4327014839fd864f44ed5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1409,7 +1409,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "rmk"
 version = "0.8.2"
-source = "git+https://github.com/HaoboGu/rmk?rev=a4fd9f2#a4fd9f2a861b9d229c0e2ec172a6e8489ee7dc2b"
+source = "git+https://github.com/HaoboGu/rmk?rev=f8210e6#f8210e6d3cc062c165ed9b0979d2bb544cd54e50"
 dependencies = [
  "byteorder",
  "cortex-m",
@@ -1439,7 +1439,7 @@ dependencies = [
 [[package]]
 name = "rmk-config"
 version = "0.6.1"
-source = "git+https://github.com/HaoboGu/rmk?rev=a4fd9f2#a4fd9f2a861b9d229c0e2ec172a6e8489ee7dc2b"
+source = "git+https://github.com/HaoboGu/rmk?rev=f8210e6#f8210e6d3cc062c165ed9b0979d2bb544cd54e50"
 dependencies = [
  "config",
  "once_cell",
@@ -1454,7 +1454,7 @@ dependencies = [
 [[package]]
 name = "rmk-macro"
 version = "0.7.1"
-source = "git+https://github.com/HaoboGu/rmk?rev=a4fd9f2#a4fd9f2a861b9d229c0e2ec172a6e8489ee7dc2b"
+source = "git+https://github.com/HaoboGu/rmk?rev=f8210e6#f8210e6d3cc062c165ed9b0979d2bb544cd54e50"
 dependencies = [
  "cargo_toml",
  "darling 0.23.0",
@@ -1482,7 +1482,7 @@ dependencies = [
 [[package]]
 name = "rmk-types"
 version = "0.2.2"
-source = "git+https://github.com/HaoboGu/rmk?rev=a4fd9f2#a4fd9f2a861b9d229c0e2ec172a6e8489ee7dc2b"
+source = "git+https://github.com/HaoboGu/rmk?rev=f8210e6#f8210e6d3cc062c165ed9b0979d2bb544cd54e50"
 dependencies = [
  "bitfield-struct",
  "heapless 0.9.2",

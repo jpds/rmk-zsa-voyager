@@ -570,7 +570,8 @@ async fn main(_spawner: Spawner) {
     let mut right_matrix = Mcp23018Matrix::new(&shared_i2c, right_debouncer);
 
     let mut keyboard = Keyboard::new(&keymap);
-    let mut host_service = HostService::new(&keymap, &rmk_config);
+    let host_ctx = rmk::host::KeyboardContext::new(&keymap);
+    let mut host_service = HostService::new(&host_ctx, &rmk_config);
 
     // Storage init is done; release the warm-boot disconnect and hand
     // PA12/USB back to the peripheral. The host sees D+ come up only
