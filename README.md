@@ -52,7 +52,7 @@ or press the `Bootloader` key from Layer 2).
 Flash with `dfu-util`:
 
 ```sh
-dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D rmk-zsa-voyager.bin
+dfu-util -d 3297:0791 -a 0 -s 0x08002000:leave -D rmk-zsa-voyager.bin
 ```
 
 Or use [ZSA Keymapp](https://www.zsa.io/flash) to flash the `.bin` file via its graphical
