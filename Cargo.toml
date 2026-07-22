@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-rmk = { git = "https://github.com/HaoboGu/rmk", rev = "b1ae662", default-features = false, features = ["vial", "storage", "watchdog", "zsa_voyager_bl"] }
+rmk = { path = "dependencies/rmk/rmk", default-features = false, features = ["storage", "watchdog", "zsa_voyager_bl", "lighting"] }
 
 embassy-stm32 = { version = "0.6", features = [
     "stm32f303cb",
@@ -22,7 +22,7 @@ embassy-executor = { version = "0.10", features = [
 embassy-time = { version = "0.5", features = ["tick-hz-32_768"] }
 embassy-sync = "0.8"
 
-rmk-palettefx = { version = "0.1.0", optional = true }
+rmk-palettefx = { path = "dependencies/rmk-palettefx", features = ["rmk-lighting"] }
 
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7.5"
@@ -31,13 +31,18 @@ defmt = "1.0"
 panic-halt = "1.0"
 
 [features]
-default = ["palettefx"]
-palettefx = ["dep:rmk-palettefx"]
+default = []
+# On-the-fly configuration over the Rynk protocol. Off by default: the Rynk
+# dispatch surface adds ~80 KB of code and does not fit the F303's 128 KB
+# flash alongside the rest of the firmware (measured: 183 KB vs the 116 KB
+# usable region). Kept as a feature so the wiring stays exercised and the
+# build can be revisited when rmk gains size-trimming options.
+rynk = ["rmk/rynk"]
 
-[build-dependencies]
-xz2 = "0.1.7"
-json = "0.12"
-const-gen = "1.6"
+# rmk-palettefx's adapter names the fork by git URL; resolve it to the same
+# vendored submodule this firmware builds against.
+[patch."https://github.com/colonelpanic8/rmk"]
+rmk = { path = "dependencies/rmk/rmk" }
 
 [[bin]]
 name = "rmk-zsa-voyager"

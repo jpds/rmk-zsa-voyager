@@ -10,9 +10,7 @@
 use embassy_stm32::i2c::{I2c, Master};
 use embassy_stm32::mode::Blocking;
 use embassy_time::Timer;
-#[cfg(feature = "palettefx")]
-use rmk_palettefx::color::{Hsv, hsv_to_rgb};
-#[cfg(feature = "palettefx")]
+use rmk::lighting::Rgb8;
 use rmk_palettefx::layout::LedLayout;
 
 use crate::keymap::{COL, ROW};
@@ -119,35 +117,12 @@ const LED_TABLE: [LedEntry; LED_COUNT] = [
     e(1, c(8,13), c(7,13), c(9,13)),
 ];
 
-/// Physical x position (0..15 across both halves) of each LED in
-/// `LED_TABLE` order. Used by the rainbow animation (hue phase offset)
-/// and, scaled by 17, by the `LedLayout` impl for rmk-palettefx.
-#[rustfmt::skip]
-#[cfg(not(feature = "palettefx"))]
-const LED_X: [u8; LED_COUNT] = [
-    // Left half (chip 0)
-    0, 1, 2, 3, 4, 5,       // row 0 alphas
-    0, 1, 2, 3, 4, 5,       // row 1
-    0, 1, 2, 3, 4, 5,       // row 2
-    0, 1, 2, 3, 4,          // row 3 (no col 6)
-    5,                      // `B` at [4,4]
-    5, 6,                   // left thumbs [5,0] [5,1]
-    // Right half (chip 1)
-    10, 11, 12, 13, 14, 15, // row 6
-    10, 11, 12, 13, 14, 15, // row 7
-    10, 11, 12, 13, 14, 15, // row 8
-    10,                     // `N` at [10,2]
-    11, 12, 13, 14, 15,     // row 9 (no col 0)
-    9, 10,                  // right thumbs [11,5] [11,6]
-];
-
 /// Physical (x, y) positions for each LED in `LED_TABLE` order.
 ///
 /// x spans 0–224 in physical coordinates, scaled to 0–255 (×255/224).
 /// y uses the *same* scale factor (×255/224 applied to the 0–58 y range),
 /// giving y ≈ 6–66. Both axes share one scale factor so the rotation matrix
 /// in Flow (and the polar math in Vortex/Ripple) is isotropic.
-#[cfg(feature = "palettefx")]
 #[rustfmt::skip]
 const LED_POS: [(u8, u8); LED_COUNT] = [
     // Left half (chip 0)
@@ -168,10 +143,8 @@ const LED_POS: [(u8, u8); LED_COUNT] = [
 
 /// LED position table for rmk-palettefx effects. Returns (x, y) from
 /// `LED_POS` - physical coordinates scaled to 0..=255.
-#[cfg(feature = "palettefx")]
 pub struct VoyagerLayout;
 
-#[cfg(feature = "palettefx")]
 impl LedLayout for VoyagerLayout {
     fn count(&self) -> usize {
         LED_COUNT
@@ -180,25 +153,6 @@ impl LedLayout for VoyagerLayout {
     fn position(&self, index: usize) -> (u8, u8) {
         LED_POS[index]
     }
-}
-
-/// Adafruit-style hue wheel: sweeps red -> green -> blue -> red.
-#[cfg(not(feature = "palettefx"))]
-fn wheel(pos: u8) -> (u8, u8, u8) {
-    if pos < 85 {
-        (255 - pos * 3, pos * 3, 0)
-    } else if pos < 170 {
-        let p = pos - 85;
-        (0, 255 - p * 3, p * 3)
-    } else {
-        let p = pos - 170;
-        (p * 3, 0, 255 - p * 3)
-    }
-}
-
-#[cfg(not(feature = "palettefx"))]
-fn scale(c: u8, brightness: u8) -> u8 {
-    ((c as u16 * brightness as u16) / 255) as u8
 }
 
 /// Sentinel in `KEY_TO_LED` for a matrix cell with no physical LED.
@@ -311,35 +265,17 @@ impl Rgb {
         }
     }
 
-    /// Write an rmk-palettefx HSV frame to the chip buffers. `frame[i]`
-    /// is the colour for the i-th entry of `LED_TABLE`; each sample is
-    /// converted to RGB via the rmk-palettefx spectrum converter.
-    /// Global brightness is already baked into the HSV `v` field by
-    /// `FrameParams::val`, so no further scaling happens here.
-    #[cfg(feature = "palettefx")]
-    pub fn paint_hsv(&mut self, frame: &[Hsv; LED_COUNT]) {
+    /// Write a composited lighting frame to the chip buffers. `frame[i]`
+    /// is the colour for the i-th entry of `LED_TABLE`; the lighting
+    /// engine's logical slot order matches by construction (the
+    /// keyboard.toml emitters are declared in `LED_TABLE` order).
+    pub fn paint_rgb8(&mut self, frame: &[Rgb8; LED_COUNT]) {
         for (idx, entry) in LED_TABLE.iter().enumerate() {
-            let rgb = hsv_to_rgb(frame[idx]);
+            let px = frame[idx];
             let chip = entry.chip as usize;
-            self.bufs[chip][entry.r as usize] = rgb.r;
-            self.bufs[chip][entry.g as usize] = rgb.g;
-            self.bufs[chip][entry.b as usize] = rgb.b;
-            self.dirty[chip] = true;
-        }
-    }
-
-    /// Horizontal rainbow: each key's hue is offset by its x position
-    /// (8 hue units per column) plus `phase`. `brightness` scales the
-    /// whole output.
-    #[cfg(not(feature = "palettefx"))]
-    pub fn paint_rainbow(&mut self, phase: u8, brightness: u8) {
-        for (idx, entry) in LED_TABLE.iter().enumerate() {
-            let hue = (LED_X[idx] as u16 * 8 + phase as u16) as u8;
-            let (r, g, b) = wheel(hue);
-            let chip = entry.chip as usize;
-            self.bufs[chip][entry.r as usize] = scale(r, brightness);
-            self.bufs[chip][entry.g as usize] = scale(g, brightness);
-            self.bufs[chip][entry.b as usize] = scale(b, brightness);
+            self.bufs[chip][entry.r as usize] = px.r;
+            self.bufs[chip][entry.g as usize] = px.g;
+            self.bufs[chip][entry.b as usize] = px.b;
             self.dirty[chip] = true;
         }
     }
