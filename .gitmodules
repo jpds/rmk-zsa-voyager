@@ -1,0 +1,6 @@
+[submodule "dependencies/rmk"]
+	path = dependencies/rmk
+	url = https://github.com/colonelpanic8/rmk
+[submodule "dependencies/rmk-palettefx"]
+	path = dependencies/rmk-palettefx
+	url = https://github.com/colonelpanic8/rmk-palettefx

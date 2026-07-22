@@ -9,9 +9,15 @@ stock QMK-based firmware.
 
 ## Features
 
-- **Live keymap editing** via [Vial](https://get.vial.today/) - remap keys without reflashing
+- **Topology-aware lighting** - the per-key RGB matrix is driven by RMK's
+  composable lighting engine ([colonelpanic8/rmk](https://github.com/colonelpanic8/rmk)):
+  a declarative `[lighting]` topology in `keyboard.toml` (52 emitters across the
+  two IS31FL3731 chips), per-layer scenes composited over an animated
+  extension band, and a master output mode
 - **Animated per-key RGB** - six switchable effects powered by [rmk-palettefx](https://github.com/jpds/rmk-palettefx):
-  Gradient, Flow, Vortex, Sparkle, Ripple, and Reactive (key-press ripples)
+  Gradient, Flow, Vortex, Sparkle, Ripple, and Reactive (key-press ripples),
+  plugged into the lighting engine's extension band via palettefx's
+  `rmk-lighting` adapter (reusable by any board with an `LedLayout`)
 - **16 built-in colour palettes** - cycle with the RGB hue keys
 - **Layer status LEDs** - 4-bit binary display of the active layer
 - **Chordal hold** - unilateral-tap behaviour (mod-taps resolve instantly when both keys are on
@@ -20,10 +26,23 @@ stock QMK-based firmware.
 ## Keymap
 
 Three compiled-in layers using the [default Voyager
-layout](https://www.zsa.io/assets/voyager/default-layout.pdf); all are
-live-editable via Vial.
+layout](https://www.zsa.io/assets/voyager/default-layout.pdf).
+
+Vial support was dropped in the move to the lighting-abstraction RMK fork.
+Its successor, the Rynk protocol (host-side keymap and lighting control), is
+wired up behind the `rynk` cargo feature, but the full Rynk dispatch surface
+currently adds ~80 KB of code and does not fit the F303's 128 KB flash
+(183 KB vs the 116 KB usable region); build with `--features rynk` to track
+it.
 
 ## Building
+
+Fetch the vendored RMK fork and rmk-palettefx (git submodules under
+`dependencies/`):
+
+```sh
+git submodule update --init
+```
 
 Either use the Nix development shell environment provided in `flake.nix`:
 
@@ -63,11 +82,15 @@ firmware image.
 
 ## Dependencies
 
+Both RMK and rmk-palettefx are pinned as git submodules under `dependencies/`
+and consumed as path dependencies, following the pattern used by
+[glove80-rmk](https://github.com/colonelpanic8/glove80-rmk).
+
 | Crate | Role |
 |-------|------|
-| [rmk](https://github.com/HaoboGu/rmk) | Keyboard framework (key scanning, HID, Vial, storage) |
+| [rmk (colonelpanic8 fork)](https://github.com/colonelpanic8/rmk) | Keyboard framework (key scanning, HID, storage, composable lighting engine, Rynk) |
 | [embassy-stm32](https://embassy.dev) | Async HAL for STM32F303 |
-| [rmk-palettefx](https://github.com/jpds/rmk-palettefx) | Palette-driven RGB animation effects |
+| [rmk-palettefx](https://github.com/jpds/rmk-palettefx) | Palette-driven RGB animation effects + `LightingSource` adapter |
 
 ## License
 
