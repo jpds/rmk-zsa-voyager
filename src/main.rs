@@ -515,8 +515,11 @@ async fn main(_spawner: Spawner) {
     // unresponsive.
     {
         let mut bus = shared_i2c.lock().await;
-        let _ = is31fl3731::init_chip(&mut bus, is31fl3731::ADDR_LEFT).await;
-        let _ = is31fl3731::init_chip(&mut bus, is31fl3731::ADDR_RIGHT).await;
+        let _ = is31fl3731::shutdown_chip(&mut bus, is31fl3731::ADDR_LEFT).await;
+        let _ = is31fl3731::shutdown_chip(&mut bus, is31fl3731::ADDR_RIGHT).await;
+        Timer::after_millis(10).await;
+        let _ = is31fl3731::configure_chip(&mut bus, is31fl3731::ADDR_LEFT).await;
+        let _ = is31fl3731::configure_chip(&mut bus, is31fl3731::ADDR_RIGHT).await;
     }
 
     // Left-half direct-GPIO matrix. Scans rows 0-5 of the 12x7 keymap.

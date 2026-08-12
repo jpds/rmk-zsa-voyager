@@ -9,7 +9,6 @@
 
 use embassy_stm32::i2c::{I2c, Master};
 use embassy_stm32::mode::Blocking;
-use embassy_time::Timer;
 #[cfg(feature = "palettefx")]
 use rmk_palettefx::color::{Hsv, hsv_to_rgb};
 #[cfg(feature = "palettefx")]
@@ -259,22 +258,33 @@ fn select_page(i2c: &mut I2c<'_, Blocking, Master>, addr: u8, page: u8) -> Resul
     write_reg(i2c, addr, REG_COMMAND, page)
 }
 
-/// Bring a chip into picture mode with every LED control bit enabled
-/// and the PWM buffer cleared. After this, the chip is ready to
-/// receive per-key PWM writes via `Rgb::flush`.
-pub async fn init_chip(i2c: &mut I2c<'_, Blocking, Master>, addr: u8) -> Result<(), ()> {
+/// Bring a chip into shutdown so the shared bus can be released back
+/// to the caller between the two chips' shutdown commands.
+///
+/// Both chips are told to shut down first, then a single recovery wait
+/// covers both before they are configured (the 10 ms is the chip's
+/// startup/settle time, not per-chip).
+pub async fn shutdown_chip(i2c: &mut I2c<'_, Blocking, Master>, addr: u8) -> Result<(), ()> {
     select_page(i2c, addr, CMD_FUNCTION)?;
-    write_reg(i2c, addr, FN_SHUTDOWN, 0x00)?;
-    Timer::after_millis(10).await;
+    write_reg(i2c, addr, FN_SHUTDOWN, 0x00)
+}
 
+/// Configure a chip that has already been shut down (see
+/// [`shutdown_chip`]): picture mode, every LED control bit enabled, and
+/// the PWM buffer cleared. After this, the chip is ready to receive
+/// per-key PWM writes via `Rgb::flush`.
+pub async fn configure_chip(i2c: &mut I2c<'_, Blocking, Master>, addr: u8) -> Result<(), ()> {
     write_reg(i2c, addr, FN_CONFIG, CONFIG_MODE_PICTURE)?;
     write_reg(i2c, addr, FN_PICTURE_DISPLAY, 0x00)?;
     write_reg(i2c, addr, FN_AUDIO_SYNC, 0x00)?;
 
     select_page(i2c, addr, CMD_FRAME_1)?;
-    for i in 0..LED_CONTROL_COUNT {
-        write_reg(i2c, addr, FRAME_REG_LED_CONTROL + i, 0xFF)?;
-    }
+    // The 18 LED-control registers are contiguous, so a single
+    // auto-incrementing write clears them all.
+    let mut buf = [0xFFu8; 1 + LED_CONTROL_COUNT as usize];
+    buf[0] = FRAME_REG_LED_CONTROL;
+    i2c.blocking_write(addr, &buf).map_err(|_| ())?;
+
     let mut buf = [0u8; 1 + CHUNK_BYTES];
     for chunk in 0..PWM_CHUNKS {
         buf[0] = FRAME_REG_PWM + chunk * CHUNK_BYTES as u8;
