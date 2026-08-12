@@ -37,7 +37,7 @@ use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::event::{ActionEvent, EventSubscriber, LayerChangeEvent, SubscribableEvent};
 #[cfg(feature = "palettefx")]
 use rmk::event::{KeyboardEvent, KeyboardEventPos};
-use rmk::futures::future::join5;
+use rmk::futures::future::join4;
 use rmk::host::HostService;
 use rmk::keyboard::Keyboard;
 use rmk::matrix::Matrix;
@@ -567,8 +567,7 @@ async fn main(_spawner: Spawner) {
     let mut right_matrix = Mcp23018Matrix::new(&shared_i2c, right_debouncer);
 
     let mut keyboard = Keyboard::new(&keymap);
-    let host_ctx = rmk::host::KeyboardContext::new(&keymap);
-    let mut host_service = HostService::new(&host_ctx, &rmk_config);
+    let host_service = HostService::new(&keymap, &rmk_config);
 
     // Storage init is done; release the warm-boot disconnect and hand
     // PA12/USB back to the peripheral. The host sees D+ come up only
@@ -591,12 +590,12 @@ async fn main(_spawner: Spawner) {
     let mut watchdog_runner =
         WatchdogRunner::new(Stm32Iwdg, embassy_time::Duration::from_secs(5));
 
-    let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config);
-    join5(
+    let mut usb_transport =
+        UsbTransport::new(driver, rmk_config.device_config).with_host_service(&host_service);
+    join4(
         run_all!(left_matrix, right_matrix, storage, watchdog_runner),
         layer_indicator(&mut led_bit0, &mut led_bit1, &shared_i2c),
         keyboard.run(),
-        host_service.run(),
         usb_transport.run(),
     )
     .await;
