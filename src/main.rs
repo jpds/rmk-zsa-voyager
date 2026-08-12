@@ -590,8 +590,7 @@ async fn main(_spawner: Spawner) {
     let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
 
     iwdg_start();
-    let mut watchdog_runner =
-        WatchdogRunner::new(Stm32Iwdg, embassy_time::Duration::from_secs(5));
+    let mut watchdog_runner = WatchdogRunner::new(Stm32Iwdg, embassy_time::Duration::from_secs(5));
 
     let mut usb_transport =
         UsbTransport::new(driver, rmk_config.device_config).with_host_service(&host_service);
