@@ -484,19 +484,22 @@ async fn main(_spawner: Spawner) {
         let d = ptr::read_volatile(odr);
         ptr::write_volatile(odr, d & !(1 << 12));
     }
-    Timer::after_millis(50).await;
+    Timer::after_millis(5).await;
     // PA12 stays driven low as GPIO and the USB clock stays off until
     // just before Driver::new below. Re-enabling the clock here would
     // bring the internal pull-up back up (the bootloader leaves PDWN=0,
     // so clocking alone is enough to reassert D+), starting the host's
     // enumeration timer before storage init has completed. Holding the
     // disconnect through storage init keeps SET_ADDRESS inside the
-    // host's window.
+    // host's window. The 5 ms here is only a settle for the detach;
+    // the hold that actually matters spans the MCP/I2C init and storage
+    // init that follow (full-speed detach needs >2.5us of SE0).
 
     // Deassert MCP23018 reset (PB8, active LOW) and let the chip settle
-    // before the first I2C transaction.
+    // before the first I2C transaction. Reset recovery is microsecond
+    // scale, so 2 ms is ample.
     let _mcp_reset = Output::new(p.PB8, Level::High, Speed::Low);
-    Timer::after_millis(10).await;
+    Timer::after_millis(2).await;
 
     // I2C1 on PB6 (SCL) / PB7 (SDA) at 400 kHz, blocking. The bus is
     // shared between the MCP matrix driver (continuous scanning) and
