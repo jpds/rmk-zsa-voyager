@@ -260,9 +260,9 @@ fn tick_base_effect(
 /// active layer), animate the per-key RGB matrix when the base layer
 /// is active, and swap to a solid per-layer palette for other layers.
 ///
-/// Boot behavior: 500 ms off, then an 8x250 ms cascade lighting LED1..4
-/// and clearing them in the same order. The Flow animation takes over
-/// once the cascade finishes.
+/// Boot behavior: a 3x300 ms `BOOT_FRAMES` cascade, then an
+/// instant clear before the Flow animation takes over. Runs
+/// concurrently with matrix/USB setup, so it never delays boot.
 async fn layer_indicator(
     led1: &mut Output<'static>,
     led2: &mut Output<'static>,
@@ -291,11 +291,12 @@ async fn layer_indicator(
     let mut phase: u8 = 0;
 
     const BOOT_FRAMES: [u8; 4] = [0b1001, 0b0110, 0b1111, 0b0000];
-    Timer::after_millis(500).await;
-    for &frame in &BOOT_FRAMES {
+    let (last, lit_frames) = BOOT_FRAMES.split_last().unwrap();
+    for &frame in lit_frames {
         apply_led_frame(led1, led2, frame);
-        Timer::after_millis(250).await;
+        Timer::after_millis(300).await;
     }
+    apply_led_frame(led1, led2, *last);
 
     let mut layer: u8 = 0;
     #[cfg(feature = "palettefx")]
