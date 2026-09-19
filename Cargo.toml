@@ -24,8 +24,8 @@ embassy-sync = "0.8"
 
 rmk-palettefx = { version = "0.1.0", optional = true }
 
-cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
-cortex-m-rt = "0.7.5"
+cortex-m = { version = "0.7.9", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.6"
 
 defmt = "1.1"
 panic-halt = "1.0"
